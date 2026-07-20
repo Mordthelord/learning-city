@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: learning-city-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node server.mjs
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
