@@ -15,7 +15,7 @@
    ============================================================================ */
 
 export const CONFIG = {
-  model: "claude-3-5-haiku-latest",   // fast + cheap; override via env ANTHROPIC_MODEL
+  model: "claude-haiku-4-5",            // current cheapest model; override via env ANTHROPIC_MODEL
   maxTokens: 1500,
   perTier: 8,                          // items requested per difficulty tier
   apiVersion: "2023-06-01",
