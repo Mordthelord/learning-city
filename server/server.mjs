@@ -11,6 +11,7 @@
 import http from "node:http";
 import { WebSocketServer } from "ws";
 import { handleGenerate, handleClassCreate, handleClassGet, SHARED_CACHE, CONFIG } from "./generate.core.mjs";
+import { handleTrack, statsJSON, authorized, dashboardHTML } from "./analytics.mjs";
 
 const PORT = process.env.PORT || 8787;
 const CORS = {
@@ -30,13 +31,23 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json", ...CORS });
-    return res.end(JSON.stringify({ ok: true, ws: true, keyConfigured: !!env.apiKey, model: env.model }));
+    return res.end(JSON.stringify({ ok: true, ws: true, track: true, keyConfigured: !!env.apiKey, model: env.model }));
   }
-  const routes = { "/generate-content": handleGenerate, "/class-create": handleClassCreate, "/class-get": handleClassGet };
+  /* analytics: stats + dashboard (GET, ADMIN_KEY-protected if set) */
+  if (url.pathname === "/stats.json") {
+    if (!authorized(url)) { res.writeHead(403, { "content-type": "application/json", ...CORS }); return res.end(JSON.stringify({ ok: false, reason: "bad key" })); }
+    res.writeHead(200, { "content-type": "application/json", ...CORS });
+    return res.end(JSON.stringify(statsJSON()));
+  }
+  if (url.pathname === "/dashboard") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    return res.end(dashboardHTML(url));
+  }
+  const routes = { "/generate-content": handleGenerate, "/class-create": handleClassCreate, "/class-get": handleClassGet, "/track": handleTrack };
   const route = routes[url.pathname];
   if (req.method !== "POST" || !route) {
     res.writeHead(404, { "content-type": "application/json", ...CORS });
-    return res.end(JSON.stringify({ ok: false, reason: "POST /generate-content | /class-create | /class-get · WS /ws" }));
+    return res.end(JSON.stringify({ ok: false, reason: "POST /generate-content | /class-create | /class-get | /track · GET /stats.json | /dashboard · WS /ws" }));
   }
   let raw = ""; for await (const c of req) raw += c;
   let body = {}; try { body = JSON.parse(raw || "{}"); } catch (_) {}
