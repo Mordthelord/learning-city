@@ -1,3 +1,9 @@
+> **UPDATE (scaffold v2):** DemoBootstrap below still works as a console smoke
+> test, but the real day-one is now **`GameBootstrap`** — a full playable slice
+> (city, player, chests, coins, question UI, telemetry). Follow
+> `SETUP_FOR_MORDY.md` for the zero-experience walkthrough, or
+> `ARCHITECTURE.md` if you're a developer.
+
 # AI.B.C Unity kit — Day One (60 minutes, zero Unity experience assumed)
 
 ## 1. Install (20 min, one-time)

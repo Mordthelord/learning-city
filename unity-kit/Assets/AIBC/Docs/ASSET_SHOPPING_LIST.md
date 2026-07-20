@@ -1,3 +1,22 @@
+# Phase 0 — FREE assets (start here, $0)
+
+Before any purchase, the scaffold gets a big visual jump for free:
+
+- **Kenney City Kits (kenney.nl)** — CC0 (public domain) stylized city/roads/suburban
+  kits. Download the "City Kit (Commercial)" + "City Kit (Roads)" + "City Kit
+  (Suburban)" glTF versions, drag into Assets, wire prefabs into the PrefabRegistry.
+- **Mixamo (mixamo.com, free with Adobe account)** — the SAME rigged characters +
+  animations the web build uses, but they look far better under Unity lighting.
+  Download X Bot / any character as FBX-for-Unity + Idle/Walk/Run clips.
+- **Unity Asset Store free section** — search "free stylized nature", "free city
+  props"; plenty of URP-ready packs.
+- **Skybox**: free "Fantasy Skybox FREE" or procedural gradient (default is fine).
+
+When the ~$150 budget is approved, the Synty list below replaces these in the
+same PrefabRegistry slots — nothing else changes.
+
+---
+
 # Asset shopping list (stylized "Fortnite feel", browser-friendly)
 
 Prices are Unity Asset Store list prices — watch for the frequent 50% sales.
