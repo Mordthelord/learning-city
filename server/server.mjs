@@ -12,6 +12,7 @@ import http from "node:http";
 import { WebSocketServer } from "ws";
 import { handleGenerate, handleClassCreate, handleClassGet, SHARED_CACHE, CONFIG } from "./generate.core.mjs";
 import { handleTrack, statsJSON, authorized, dashboardHTML } from "./analytics.mjs";
+import { gate, recordUsage, budgetJSON, LIMITS } from "./budget.mjs";
 
 const PORT = process.env.PORT || 8787;
 const CORS = {
@@ -23,6 +24,8 @@ const env = {
   apiKey: process.env.ANTHROPIC_API_KEY,
   model: process.env.ANTHROPIC_MODEL || CONFIG.model,
   cache: SHARED_CACHE,
+  maxTokens: LIMITS.maxTokens,          // r22 spend guardrails
+  gate, onUsage: recordUsage,
 };
 if (!env.apiKey) console.warn("⚠  ANTHROPIC_API_KEY is not set — AI generation disabled until you set it (offline fallbacks still work in-game).");
 
@@ -31,7 +34,13 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json", ...CORS });
-    return res.end(JSON.stringify({ ok: true, ws: true, track: true, keyConfigured: !!env.apiKey, model: env.model }));
+    return res.end(JSON.stringify({ ok: true, ws: true, track: true, keyConfigured: !!env.apiKey, model: env.model,
+      aiToday: budgetJSON().today }));
+  }
+  if (url.pathname === "/budget.json") {
+    if (!authorized(url)) { res.writeHead(403, { "content-type": "application/json", ...CORS }); return res.end(JSON.stringify({ ok: false, reason: "bad key" })); }
+    res.writeHead(200, { "content-type": "application/json", ...CORS });
+    return res.end(JSON.stringify({ ok: true, budget: budgetJSON() }));
   }
   /* analytics: stats + dashboard (GET, ADMIN_KEY-protected if set) */
   if (url.pathname === "/stats.json") {

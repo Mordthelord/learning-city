@@ -157,6 +157,16 @@ h2{font-size:15px;margin:18px 0 8px;color:#bfc8f0}
 <h2>📅 Per day</h2><table id="days"><thead><tr><th>Date</th><th>Active kids</th><th>Minutes played</th><th>Answers</th><th>Games started</th></tr></thead><tbody></tbody></table>
 <h2>💬 Latest feedback</h2><div id="fb"></div>
 <script>
+fetch("/budget.json?key=${encodeURIComponent(key)}").then(r=>r.json()).then(b=>{
+  if(!b||!b.ok) return; const g=b.budget;
+  const d=document.createElement("div"); d.className="cards";
+  d.innerHTML=[["AI calls today",g.today.calls+" / "+g.today.cap],
+    ["AI calls this month",g.month.calls+" / "+g.month.cap],
+    ["Est. spend this month","$"+g.month.estSpendUSD+" / $"+g.month.capUSD],
+    ["Model",g.model],["AI status",g.disabled?"OFF (kill switch)":(g.lastRefusal?"capped: "+g.lastRefusal:"active")]]
+    .map(c=>'<div class="card"><b>'+c[1]+'</b><span>'+c[0]+'</span></div>').join("");
+  const host=document.getElementById("cards"); host.parentNode.insertBefore(d, host.nextSibling);
+}).catch(()=>{});
 fetch("/stats.json?key=${encodeURIComponent(key)}").then(r=>r.json()).then(s=>{
   if(!s.ok){ document.getElementById("gen").textContent="Not authorized — add ?key=YOUR_ADMIN_KEY to the URL"; return; }
   const o=s.overview;

@@ -6595,6 +6595,7 @@ const CONTENT={
       try{
         const page=fresh? (this.pages[key]=(this.pages[key]||0)+1) : 0;
         const body={topic,grade,page};
+        try{ body.device=localStorage.getItem("tlp_dev_id")||undefined; }catch(e){}  // r22: per-device AI rate limit
         if(spec&&spec.exclude) body.exclude=spec.exclude.slice(0,120);
         if(this.classInfo&&this.classInfo.curriculum) body.curriculum=this.classInfo.curriculum;
         const r=await fetch(this.endpoint,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});

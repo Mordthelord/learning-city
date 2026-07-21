@@ -15,7 +15,7 @@
    ============================================================================ */
 
 export const CONFIG = {
-  model: "claude-haiku-4-5",            // current cheapest model; override via env ANTHROPIC_MODEL
+  model: "claude-sonnet-5",            // Sonnet 5 (per pilot decision); override via env ANTHROPIC_MODEL
   maxTokens: 1500,
   perTier: 8,                          // items requested per difficulty tier
   apiVersion: "2023-06-01",
@@ -104,6 +104,7 @@ export async function callAnthropic({ apiKey, model, system, user, fetchImpl, ma
   if(!res.ok){ const txt = await res.text().catch(()=> ""); throw new Error("anthropic "+res.status+": "+txt.slice(0,200)); }
   const data = await res.json();
   const text = (data.content||[]).filter(c=>c.type==="text").map(c=>c.text).join("");
+  callAnthropic.lastUsage = data.usage || null;   // r22: spend tracking
   return text;
 }
 
@@ -153,6 +154,7 @@ export async function generate(spec, opts){
   const key = (spec.topic+"|"+(spec.grade||6)+"|p"+(spec.page||0)+(spec.curriculum?"|c"+String(spec.curriculum).length:"")).toLowerCase();
   if(opts.cache && opts.cache.get){ const hit = await opts.cache.get(key); if(hit) return { ok:true, bank:hit, cached:true }; }
   if(!opts.apiKey) return { ok:false, reason:"no api key configured on server" };
+  if(opts.gate){ const g = opts.gate(); if(!g.ok) return { ok:false, reason:g.reason, budget:true }; }
 
   const { system, user } = buildPrompt(spec);
   let lastErr;
@@ -160,6 +162,7 @@ export async function generate(spec, opts){
     try{
       const u = attempt===0 ? user : user + "\n\nREMINDER: output ONLY the JSON object with the exact shape and enough items per tier.";
       const text = await callAnthropic({ apiKey:opts.apiKey, model:opts.model, system, user:u, fetchImpl:opts.fetchImpl, maxTokens:opts.maxTokens });
+      if(opts.onUsage) try{ opts.onUsage(callAnthropic.lastUsage); }catch(_){}
       const result = parseAndValidate(text, spec);
       if(result.safe===false) return { ok:false, safe:false, reason:result.reason };
       if(opts.cache && opts.cache.set) await opts.cache.set(key, result);
@@ -204,9 +207,12 @@ export async function handleClassGet(body, env){
 export async function handleGenerate(body, env){
   const spec = { topic: body && body.topic, grade: body && body.grade, subject: body && body.subject, perTier: body && body.perTier,
     exclude: body && body.exclude, curriculum: body && body.curriculum, page: body && body.page };
+  const device = String(body && body.device || "").slice(0, 40);
   const r = await generate(spec, {
     apiKey: env.apiKey, model: env.model, fetchImpl: env.fetchImpl,
-    cache: env.cache || SHARED_CACHE,
+    cache: env.cache || SHARED_CACHE, maxTokens: env.maxTokens,
+    gate: env.gate ? () => env.gate(device) : null,
+    onUsage: env.onUsage || null,
   });
   return r.ok ? { status:200, json:{ ok:true, bank:r.bank, cached:!!r.cached } }
              : { status: r.safe===false ? 200 : 400, json:{ ok:false, safe:r.safe, reason:r.reason } };

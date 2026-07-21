@@ -11,3 +11,17 @@ services:
         sync: false
       - key: ADMIN_KEY
         sync: false
+      # r22 spend guardrails — all optional; these are the safe defaults.
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-5
+      - key: MAX_CALLS_PER_DAY
+        value: "60"
+      - key: MAX_CALLS_PER_MONTH
+        value: "600"
+      - key: MAX_SPEND_USD_MONTH
+        value: "15"
+      - key: MAX_CALLS_PER_DEVICE_HR
+        value: "6"
+      - key: MAX_TOKENS_PER_CALL
+        value: "1500"
+      # set AI_DISABLED=1 in the Render dashboard to kill-switch AI instantly
