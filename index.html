@@ -887,6 +887,7 @@ body.acc-calm *,body.acc-calm *::before,body.acc-calm *::after{animation-duratio
           <p class="kicker">Last one</p>
           <h2>Consent &amp; contact</h2>
           <p class="subtext">Questions about HOW your child learns (focus, learning style, motivation) are asked to your child directly, in kid language — kids show this better than anyone can guess.</p>
+          <label class="checkitem" style="margin-bottom:10px;"><input type="checkbox" name="consentPlay" id="consentPlay">I am this child's parent or guardian and I give my consent for them to use this learning app. Only learning-progress data is collected (anonymous in pilot reports), and I can view, download or delete everything at any time from the Parent Corner.</label>
           <label class="checkitem" style="margin-bottom:10px;"><input type="checkbox" name="consentBehavior" id="consentBehavior">I consent to in-app behavioral data being used to refine my child's learning profile. Never shared or sold.</label>
           <label class="checkitem"><input type="checkbox" name="consentReview" id="consentReview">I'd like a periodic check-in to review the profile.</label>
           <div class="field" style="margin-top:16px;"><label class="title" for="parentEmail">Your email</label><input type="text" id="parentEmail" name="parentEmail" placeholder="you@example.com"></div>
@@ -2463,14 +2464,18 @@ body.acc-calm *,body.acc-calm *::before,body.acc-calm *::after{animation-duratio
     var statusMsg = document.getElementById('parentStatusMsg');
     var warnBanner = document.getElementById('consentWarnBanner');
     var consentRow = document.getElementById('consentBehavior').closest('.checkitem');
-    if(!data.consentBehavior){
+    var playRow = document.getElementById('consentPlay').closest('.checkitem');
+    if(!data.consentPlay || !data.consentBehavior){
       warnBanner.classList.add('show');
-      consentRow.classList.add('flagged');
+      if(!data.consentPlay) playRow.classList.add('flagged'); else playRow.classList.remove('flagged');
+      if(!data.consentBehavior) consentRow.classList.add('flagged'); else consentRow.classList.remove('flagged');
       statusMsg.textContent = '';
       return;
     }
     warnBanner.classList.remove('show');
     consentRow.classList.remove('flagged');
+    playRow.classList.remove('flagged');
+    data.consentAt = new Date().toISOString();   // timestamped digital consent (Customer Demands 7.2)
     statusMsg.textContent = 'Saving...';
     statusMsg.className = 'status';
     var res = await saveProfileSection(currentCode, 'parent', data);
@@ -2746,7 +2751,8 @@ body.acc-calm *,body.acc-calm *::before,body.acc-calm *::after{animation-duratio
 "Your first name or nickname":"השם הפרטי או הכינוי שלכם","Parent or guardian":"הורה או אפוטרופוס",
 "I consent to in-app behavioral data being used to refine my child's learning profile. Never shared or sold.":"אני מסכים/ה שנתוני התנהגות בתוך האפליקציה ישמשו לחידוד פרופיל הלמידה של ילדי. לעולם לא משותף ולא נמכר.",
 "I'd like a periodic check-in to review the profile.":"אשמח לתזכורת תקופתית לעדכון הפרופיל.",
-"Please check the consent box above before submitting.":"נא לסמן את תיבת ההסכמה לפני שליחה.",
+"Please check the consent box above before submitting.":"נא לסמן את תיבות ההסכמה לפני שליחה.",
+"I am this child's parent or guardian and I give my consent for them to use this learning app. Only learning-progress data is collected (anonymous in pilot reports), and I can view, download or delete everything at any time from the Parent Corner.":"אני ההורה או האפוטרופוס של הילד/ה ואני נותן/ת את הסכמתי לשימוש שלהם באפליקציית הלמידה. נאסף רק מידע על התקדמות בלמידה (אנונימי בדוחות הפיילוט), ואני יכול/ה לצפות, להוריד או למחוק הכול בכל רגע מפינת ההורים.",
 "Question 1 of 6 · under a minute each":"שאלה 1 מתוך 6 · פחות מדקה כל אחת",
 "Question 2 of 6":"שאלה 2 מתוך 6","Question 3 of 6":"שאלה 3 מתוך 6","Question 4 of 6":"שאלה 4 מתוך 6",
 "Question 5 of 6":"שאלה 5 מתוך 6","Last one":"אחרונה","Last step":"שלב אחרון",
@@ -4820,7 +4826,14 @@ function renderParentCorner(){
     if(CONFIG.name) FAMILY.saveCurrent(CONFIG.name); FAMILY.fresh(); };
   famRow.appendChild(addB);
   // data controls
-  const dc=card("🔒 Your family's data", `<p class="muted" style="font-size:13px;margin:0 0 8px">Everything lives on this device and in your private pilot telemetry (anonymous id, never your child's name). It is never shared or sold. You can take it or wipe it any time.</p>
+  let consentLine="";
+  try{ const raw=loadRawProfile(); const pc=raw&&raw.parent;
+    consentLine = raw&&raw.classInfo ? `<div class="pill" style="margin-bottom:8px">🏫 Class profile — consent handled by the teacher/school</div>`
+      : (pc&&(pc.consentAt||pc.consentPlay))
+        ? `<div class="pill" style="background:var(--good);color:#fff;margin-bottom:8px">✓ Parental consent given${pc.consentAt?" · "+new Date(pc.consentAt).toLocaleDateString():""}</div>`
+        : `<div class="pill" style="background:var(--warn);color:#1a1a2e;margin-bottom:8px">⚠ Consent not yet recorded — you'll be asked before the next play session</div>`;
+  }catch(e){}
+  const dc=card("🔒 Your family's data", consentLine+`<p class="muted" style="font-size:13px;margin:0 0 8px">Everything lives on this device and in your private pilot telemetry (anonymous id, never your child's name). It is never shared or sold. You can take it or wipe it any time.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap" id="dc-row"></div>`);
   const dcRow=dc.querySelector("#dc-row");
   const dl=el("button","btn small","⬇ Download all data");
@@ -6984,7 +6997,40 @@ function applyProfile(profile){
     CONFIG.likesCompete = /Performance/i.test((c.motivation&&c.motivation.parentType)||'') || (p.gameArchetype||'').toLowerCase().includes('compet');
   }catch(e){ console.warn('profile map failed', e); }
 }
-function enterHubFromProfile(){ applyTheme(activeTheme()); MUSIC.start("lobby", activeTheme()); HUB.subject=CONFIG.subjects[0]||'english'; renderHub(); show("scr-hub"); }
+function enterHubFromProfile(){
+  // r23: family profiles need timestamped parental consent before play
+  // (Customer Demands 7.2). New questionnaires collect it; this one-time card
+  // covers profiles saved before the checkbox existed. Class-code profiles are
+  // consented through the teacher/school.
+  if(consentNeeded()) return showConsentGate(()=>enterHubFromProfile());
+  applyTheme(activeTheme()); MUSIC.start("lobby", activeTheme()); HUB.subject=CONFIG.subjects[0]||'english'; renderHub(); show("scr-hub"); }
+function consentNeeded(){
+  try{ const raw=loadRawProfile(); if(!raw||raw.classInfo) return false;
+    const p=raw.parent; if(!p) return false;
+    return !(p.consentPlay||p.consentAt);
+  }catch(e){ return false; }
+}
+function showConsentGate(onDone){
+  const w=el("div","pausewrap"); w.style.zIndex=600;
+  w.innerHTML=`<div class="pausecard">
+    <div class="em">🛡️</div><h3>A grown-up's OK, please</h3>
+    <div class="why" style="text-align:left;font-size:14px">One quick step for the parent or guardian:
+    this app collects only learning-progress data (anonymous in pilot reports), never shares or
+    sells it, and you can view, download or delete everything at any time from the Parent Corner.</div>
+    <label style="display:flex;gap:10px;align-items:flex-start;text-align:left;margin:12px 0;font-size:14px;cursor:pointer">
+      <input type="checkbox" id="cg-ok" style="margin-top:3px;transform:scale(1.3)">
+      <span>I am the parent or guardian and I give my consent for my child to play.</span></label>
+    <button class="btn" id="cg-go" disabled style="opacity:.5">Continue ▶</button></div>`;
+  document.body.appendChild(w);
+  const cb=w.querySelector("#cg-ok"), go=w.querySelector("#cg-go");
+  cb.onchange=()=>{ go.disabled=!cb.checked; go.style.opacity=cb.checked?1:.5; };
+  go.onclick=()=>{ if(!cb.checked) return;
+    try{ const raw=loadRawProfile()||{}; raw.parent=raw.parent||{};
+      raw.parent.consentPlay=true; raw.parent.consentAt=new Date().toISOString();
+      saveRawProfile(raw); }catch(e){}
+    try{ TELEM.track("consent",{given:true}); }catch(e){}
+    w.remove(); onDone&&onDone(); };
+}
 
 /* Onboarding stage — hosts the full questionnaire in an isolated iframe. */
 function startOnboarding(){
@@ -7197,7 +7243,13 @@ window.__AIBC_HE={
 "Saved step by step from the questionnaire. Only what's below goes into the city — check it before we build.":"נשמר שלב־שלב מהשאלון. רק מה שלמטה נכנס לעיר — בדקו לפני שבונים.",
 /* ---------- onboarding host ---------- */
 "🎓 Learning Profile":"🎓 פרופיל למידה","parent + student questionnaire builds the games":"שאלון הורה + תלמיד בונה את המשחקים",
-"📂 Load profile file":"📂 טעינת קובץ פרופיל"
+"📂 Load profile file":"📂 טעינת קובץ פרופיל",
+"A grown-up's OK, please":"צריך אישור של מבוגר",
+"One quick step for the parent or guardian: this app collects only learning-progress data (anonymous in pilot reports), never shares or sells it, and you can view, download or delete everything at any time from the Parent Corner.":"צעד קצר אחד להורה או לאפוטרופוס: האפליקציה אוספת רק מידע על התקדמות בלמידה (אנונימי בדוחות הפיילוט), לעולם לא משתפת ולא מוכרת אותו, ואפשר לצפות, להוריד או למחוק הכול בכל רגע מפינת ההורים.",
+"I am the parent or guardian and I give my consent for my child to play.":"אני ההורה או האפוטרופוס ואני נותן/ת את הסכמתי שילדי ישחק/תשחק.",
+"Continue ▶":"המשך ▶",
+"🏫 Class profile — consent handled by the teacher/school":"🏫 פרופיל כיתה — ההסכמה מטופלת דרך המורה/בית הספר",
+"⚠ Consent not yet recorded — you'll be asked before the next play session":"⚠ ההסכמה עדיין לא נרשמה — תתבקשו לאשר לפני המשחק הבא"
 };
 window.__AIBC_HE_RX=[
 [/^Round (\d+) complete, (.+)!$/,"סיבוב $1 הושלם, $2!"],
@@ -20087,7 +20139,7 @@ function cityInitTouch(){
    10-init: wire the city into the platform (monkey-patches) + enter/exit flow
    ============================================================================ */
 
-const CITY_BUILD="r21-hebrew (full parallel Hebrew UI: questionnaires, hub, 16 games, coach, parent corner — RTL, one-tap switch)";
+const CITY_BUILD="r23-consent (timestamped parental consent: required questionnaire checkbox + one-time gate for older profiles)";
 try{ console.log("%c🌆 Learning City "+CITY_BUILD, "font-weight:bold;color:#57d98a"); }catch(e){}
 let _cityBuilt=false;
 CITY.enter=function(){
@@ -20153,7 +20205,11 @@ function cityReturnFromGame(){
       remember the family profile so next visit can skip straight in */
 const _applyProfile=applyProfile;
 applyProfile=function(prof){ try{ localStorage.setItem("tlp_family_profile", JSON.stringify(prof)); }catch(e){} return _applyProfile(prof); };
-enterHubFromProfile=function(){ CITY.enter(); };
+enterHubFromProfile=function(){
+  // r23: family profiles need timestamped parental consent before play (7.2)
+  if(typeof consentNeeded==="function" && consentNeeded())
+    return showConsentGate(()=>enterHubFromProfile());
+  CITY.enter(); };
 
 /* 2. "Continue as <name>" on the questionnaire screen when a profile is saved */
 function addContinueButton(){
