@@ -18067,9 +18067,23 @@ function openStudyPicker(){
   renderTabs(); renderCurated(); refreshStatus();
 }
 
-/* venue modal: shows ONLY games that fit the current subject — no picking here */
+/* venue modal: shows ONLY games that fit the current subject — no picking here.
+   r25: 2D arcade templates live ONLY in the Arcade district (hub untouched).
+   Any 2D venue that still fires outside it (e.g. interior kiosks wired in
+   03y-interiors) is redirected to that district's NATIVE game menu. */
 function openVenue(title, sub, tplIds, opts){
   opts=opts||{};
+  const inArcade = CITY.zone==="arcadeIn" || CITY.district==="arcade"
+    || (CITY.zone==="interior" && CITY._intDistrict==="arcade");
+  if(!inArcade){
+    const dk=CITY.district || (CITY.zone==="interior"?CITY._intDistrict:null);
+    if(typeof NATIVE_GAME_MENU!=="undefined" && dk && NATIVE_GAME_MENU[dk]) return openNativeVenue(dk, title, sub);
+    cityModal(title,"",`<div style="text-align:center;font-size:15px;line-height:1.7">
+      <div style="font-size:38px">🕹️</div>
+      The 2D cabinets all moved to <b>THE ARCADE</b> on Arcade Strip!<br>
+      This neighborhood plays its own games — look for the glowing beams.</div>`,{id:"venue"});
+    return;
+  }
   const subject=citySubject();
   const all=tplIds.map(id=>TEMPLATES.find(x=>x.id===id)).filter(Boolean);
   const tpls=all.filter(tpl=>subjectFits(tpl, subject));
@@ -18112,29 +18126,30 @@ function openVenue(title, sub, tplIds, opts){
 /* ---------------- wire every venue ---------------- */
 function cityBuildVenues(){
   const I=CITY.interactables;
-  // — SPORTS: stadium box office (2D hoops game) —
-  if(SPOTS.stadium) I.push({x:SPOTS.stadium.x,z:SPOTS.stadium.z,r:4.2,icon:"🎟️",label:"Stadium Box Office — play Basketball Shootout",
-    action:()=>openVenue("🏟️ Stadium Box Office","the classic Basketball Shootout, tuned to your topic",["hoops"])});
-  // — MOTOR: garage (2D motox) —
-  if(SPOTS.garage) I.push({x:SPOTS.garage.x,z:SPOTS.garage.z,r:4.2,icon:"🔧",label:"Garage Arcade — Moto Cross",
-    action:()=>openVenue("🔧 Garage Arcade","Moto Cross — jump the answer ramps",["motox"])});
-  // — SPACE: observatory (2D shooter), mission control (co-op + systems lab) —
-  if(SPOTS.observatory) I.push({x:SPOTS.observatory.x,z:SPOTS.observatory.z,r:4.4,icon:"🔭",label:"Observatory — Star Target range",
-    action:()=>openVenue("🔭 Observatory","Target Shooter under the stars",["shooter"])});
-  if(SPOTS.missionctl) I.push({x:SPOTS.missionctl.x,z:SPOTS.missionctl.z,r:4.2,icon:"🖥️",label:"Mission Control — team games",
-    action:()=>openVenue("🖥️ Mission Control","two-brain games: co-op platformer & systems lab",["coop","systemslab"])});
-  // — FANTASY: castle gate (word/reading games) —
-  if(SPOTS.castle) I.push({x:SPOTS.castle.x,z:SPOTS.castle.z,r:4.6,icon:"🏰",label:"Castle Gate — word quests",
-    action:()=>openVenue("🏰 Castle Hollowmere","the Loremaster's word trials",["rhythm","branch","rebuttal"])});
-  // — WILDWOOD: campfire (comprehension/mystery games) —
-  if(SPOTS.campfire) I.push({x:SPOTS.campfire.x,z:SPOTS.campfire.z,r:4.2,icon:"🔥",label:"Campfire — story & mystery games",
-    action:()=>openVenue("🔥 Campfire Stories","evidence-hunting mysteries by firelight",["casefile","caseload","branch"])});
-  // — ZOO: ticket booth (runner) —
-  if(SPOTS.ticket) I.push({x:SPOTS.ticket.x,z:SPOTS.ticket.z,r:4,icon:"🎟️",label:"Zoo Ticket Booth — Safari Runner",
-    action:()=>openVenue("🦁 Safari Runner","Endless Runner through the savanna",["runner"])});
-  // — AQUA: dive shop (growth + lane) —
-  if(SPOTS.diveshop) I.push({x:SPOTS.diveshop.x,z:SPOTS.diveshop.z,r:4.2,icon:"🌊",label:"Dive Shop — reef games",
-    action:()=>openVenue("🌊 Dive Shop","grow the reef, defend the lane",["growth","lane"])});
+  // r25: district venues are doors to NATIVE games only — the 2D library lives in the Arcade
+  // — SPORTS: stadium box office (native courts card) —
+  if(SPOTS.stadium) I.push({x:SPOTS.stadium.x,z:SPOTS.stadium.z,r:4.2,icon:"🎟️",label:"Stadium Box Office — today's games",
+    action:()=>openNativeVenue("sports","🏟️ Stadium Box Office","every event on a REAL court, tuned to your topic")});
+  // — MOTOR: garage (native pit games) —
+  if(SPOTS.garage) I.push({x:SPOTS.garage.x,z:SPOTS.garage.z,r:4.2,icon:"🔧",label:"Garage — race day sign-up",
+    action:()=>openNativeVenue("motor","🔧 The Garage","race the track, work the pits")});
+  // — SPACE: observatory (native asteroid range), mission control (satellite align) —
+  if(SPOTS.observatory) I.push({x:SPOTS.observatory.x,z:SPOTS.observatory.z,r:4.4,icon:"🔭",label:"Observatory — Asteroid Answer-Blast",
+    action:()=>startAsteroidBlast()});
+  if(SPOTS.missionctl) I.push({x:SPOTS.missionctl.x,z:SPOTS.missionctl.z,r:4.2,icon:"🖥️",label:"Mission Control — Satellite Align",
+    action:()=>startSatAlign()});
+  // — FANTASY: castle gate (native quests) —
+  if(SPOTS.castle) I.push({x:SPOTS.castle.x,z:SPOTS.castle.z,r:4.6,icon:"🏰",label:"Castle Gate — the Quarter's trials",
+    action:()=>openNativeVenue("fantasy","🏰 Castle Hollowmere","potions, runes, duels & dragons")});
+  // — WILDWOOD: campfire (native camp games) —
+  if(SPOTS.campfire) I.push({x:SPOTS.campfire.x,z:SPOTS.campfire.z,r:4.2,icon:"🔥",label:"Campfire — games of the Wildwood",
+    action:()=>openNativeVenue("wild","🔥 Campfire Circle","arrows, stew pots & stepping stones")});
+  // — ZOO: ticket booth (native safari games) —
+  if(SPOTS.ticket) I.push({x:SPOTS.ticket.x,z:SPOTS.ticket.z,r:4,icon:"🎟️",label:"Zoo Ticket Booth — keeper duties",
+    action:()=>openNativeVenue("zoo","🦁 Zoo Gardens","feed, rescue & track the animals")});
+  // — AQUA: dive shop (native reef games) —
+  if(SPOTS.diveshop) I.push({x:SPOTS.diveshop.x,z:SPOTS.diveshop.z,r:4.2,icon:"🌊",label:"Dive Shop — cove adventures",
+    action:()=>openNativeVenue("aqua","🌊 Dive Shop","dive, swim, pop & deliver")});
   // — ARCADE: food stand (station), jetpack billboard? -> street cabinet —
   if(SPOTS.foodstand) I.push({x:SPOTS.foodstand.x,z:SPOTS.foodstand.z,r:4,icon:"🍕",label:"Order Up! — kitchen rush",
     action:()=>openVenue("🍕 Order Up!","Papa's-style order station",["station"])});
@@ -18186,35 +18201,37 @@ function cityVenuePad(B,G,x,z,yaw,o){
   sp.position.set(x,4.7,z); CITY.scene.add(sp);
   CITY.interactables.push({x:x+Math.sin(yaw)*2.3,z:z+Math.cos(yaw)*2.3,r:3.4,
     icon:o.ico, label:o.label+" — play!", zone:o.zone,
-    action:()=>openVenue(o.ico+" "+o.label, o.sub||"", o.games, o.themeKey!==undefined?{themeKey:o.themeKey}:{})});
+    action:()=>{
+      // r25: explicit action (district guide kiosks) or a native replacement
+      // (ice/lava pads built in 03x-extra) beats the 2D library
+      if(o.action) return o.action();
+      const nat=(typeof CITY_PAD_NATIVE!=="undefined")&&CITY_PAD_NATIVE[(o.zone||"")+":"+o.label];
+      if(nat) return nat();
+      openVenue(o.ico+" "+o.label, o.sub||"", o.games||[], o.themeKey!==undefined?{themeKey:o.themeKey}:{});
+    }});
 }
 
-/* per-district kiosk spot + flavor; games = district favorites MINUS what the
-   district's built-in venues already launch, so every district reaches ≥4 */
+/* r25: per-district GAMES GUIDE kiosk — one glowing kiosk that opens the
+   district's NATIVE game card (the 2D cabinets live ONLY in the Arcade now) */
 const CITY_PAD_DEFS={
-  sports: {at:[ 20, 58], ico:"🏅", label:"Training Arcade",  sub:"sports drills, tuned to your topic", accent:0x57d98a},
-  motor:  {at:[  0,  6], ico:"🏁", label:"Infield Arcade",   sub:"pedal-to-the-metal games",           accent:0xff7a3d},
-  space:  {at:[  0, 10], ico:"🛰️", label:"Cadet Arcade",     sub:"flight-training simulators",         accent:0x6ea8ff},
-  fantasy:{at:[-22, 32], ico:"🔮", label:"Scrying Arcade",   sub:"quests inside the crystal",          accent:0xb98bff},
-  wild:   {at:[  0, 30], ico:"🎒", label:"Ranger Arcade",    sub:"trail games at the trailhead",       accent:0x7ac74f},
-  zoo:    {at:[-12, 50], ico:"🐾", label:"Safari Arcade",    sub:"animal games by the gate",           accent:0xffc24d},
-  aqua:   {at:[  8, 50], ico:"🐚", label:"Boardwalk Arcade", sub:"beach games in the sand",            accent:0x37d0e0},
-  fashion:{at:[ 14, 54], ico:"💄", label:"Style Arcade",     sub:"design games off the runway",        accent:0xff8bd8},
-  art:    {at:[  0, 48], ico:"🖌️", label:"Studio Arcade",    sub:"maker games in the gallery",         accent:0xffa53d},
-  farm:   {at:[-14, 34], ico:"🌽", label:"Barnyard Arcade",  sub:"harvest games by the garden",        accent:0xd8b84a},
+  sports: {at:[ 20, 58], ico:"🏅", label:"Training Guide",  sub:"real courts, real drills",        accent:0x57d98a},
+  motor:  {at:[  0,  6], ico:"🏁", label:"Pit Row Guide",   sub:"race the track, work the pits",   accent:0xff7a3d},
+  space:  {at:[  0, 10], ico:"🛰️", label:"Mission Guide",   sub:"launches, orbits & asteroids",    accent:0x6ea8ff},
+  fantasy:{at:[-22, 32], ico:"🔮", label:"Quest Guide",     sub:"spells, runes & dragons",         accent:0xb98bff},
+  wild:   {at:[  0, 30], ico:"🎒", label:"Trailhead Guide", sub:"camp games under the pines",      accent:0x7ac74f},
+  zoo:    {at:[-12, 50], ico:"🐾", label:"Safari Guide",    sub:"keeper duties by the gate",       accent:0xffc24d},
+  aqua:   {at:[  8, 50], ico:"🐚", label:"Harbor Guide",    sub:"reef & harbor adventures",        accent:0x37d0e0},
+  fashion:{at:[ 14, 54], ico:"💄", label:"Style Guide",     sub:"runway & atelier challenges",     accent:0xff8bd8},
+  art:    {at:[  0, 48], ico:"🖌️", label:"Gallery Guide",   sub:"studio games in the quarter",     accent:0xffa53d},
+  farm:   {at:[-14, 34], ico:"🌽", label:"Barnyard Guide",  sub:"harvest games by the garden",     accent:0xd8b84a},
 };
-const CITY_VENUE_BUILTIN={ sports:["hoops"], motor:["motox"], space:["shooter","coop","systemslab"],
-  fantasy:["rhythm","branch","rebuttal"], wild:["casefile","caseload","branch"], zoo:["runner"],
-  aqua:["growth","lane"] };   // arcade: 16 cabinets + Order Up! already ≥4
 function cityBuildGamePads(){
   const B=new GeoBatch(), G=new GeoBatch();
   DISTRICTS.forEach(d=>{
     const def=CITY_PAD_DEFS[d.key]; if(!def) return;
-    const have=CITY_VENUE_BUILTIN[d.key]||[];
-    const games=(CITY_DISTRICT_GAMES[d.key]||[]).filter(id=>have.indexOf(id)<0);
-    if(!games.length) return;
     const F=districtFrame(d), p=F.L(def.at[0],def.at[1]);
-    cityVenuePad(B,G,p.x,p.z,F.yaw,{ico:def.ico,label:def.label,sub:def.sub,games,accent:def.accent});
+    cityVenuePad(B,G,p.x,p.z,F.yaw,{ico:def.ico,label:def.label,sub:def.sub,accent:def.accent,
+      action:()=>openNativeVenue(d.key, def.ico+" "+d.name+" Games", def.sub)});
   });
   CITY.scene.add(B.build()); CITY.scene.add(G.build({glow:true}));
 }
@@ -19457,11 +19474,13 @@ function cityBuildActivities(){
   if(DISTRICT_BY_KEY.wild){ wirePhotoSafari(); }
   if(DISTRICT_BY_KEY.space) wireMarsRocks();
   if(DISTRICT_BY_KEY.farm) wireFarm();
+  cityBuildNativeBeacons();   // r25: beams for the new native district games
   // r24 (12): the Design Lab fabric game confused playtesters — wrap the interior
   // entry (defined in 03y-interiors.js) to add clear instructions + a guided first step
   if(typeof enterInterior==="function" && !enterInterior._r24){
     const _ei=enterInterior;
     enterInterior=function(type,door){
+      CITY._intDistrict=CITY.district;   // r25: remember whose door this is (openVenue guard)
       _ei(type,door);
       if(type==="design") designLabGuide();
       if(type==="barn") setTimeout(()=>cityToast("🌾 Read the trough board, then press E at a feed box to scoop — hit the amount EXACTLY!",5200),600);
@@ -19681,6 +19700,588 @@ function startFarmFeed(){
       if(u.shake>0){ u.shake-=dt*2; u.animal.rotation.y=Math.sin(u.shake*30)*0.5*u.shake; if(u.shake<=0)u.animal.rotation.y=0; }
     });
   };
+}
+
+/* ============================================================================
+   r25: NATIVE DISTRICT GAMES — every district plays like it was born there.
+   The 2D template library now lives ONLY in the Arcade; each district gets
+   >=4 native-3D, question-gated games. Two shared frames power the new ones:
+   - actTrioStations: 3 themed answer stations (press E / walk through /
+     carry-and-deliver) — the Feed-Run pattern, generalized
+   - actTrioShoot: aim & fire a themed projectile at 3 answer targets
+   3 rounds each, wrong answers open the study card, coins via actResult only.
+   ============================================================================ */
+function natFrame(cfg){
+  if(cfg.world){ const o=ZONES[cfg.world].origin;
+    return { yaw:0, L:(lx,lz)=>({x:o[0]+lx, z:o[1]+lz}) }; }
+  const d=DISTRICT_BY_KEY[cfg.district]; return d?districtFrame(d):null;
+}
+function natMesh(geo,c){ return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({color:c})); }
+function natIn(g,mesh,x,y,z,rx,ry){ mesh.position.set(x||0,y||0,z||0); if(rx)mesh.rotation.x=rx; if(ry)mesh.rotation.y=ry; g.add(mesh); return mesh; }
+const NB={
+  box:(g,w,h,d2,c,x,y,z,ry)=>natIn(g,natMesh(new THREE.BoxGeometry(w,h,d2),c),x,y,z,0,ry),
+  cyl:(g,r1,r2,h,c,x,y,z)=>natIn(g,natMesh(new THREE.CylinderGeometry(r1,r2,h,10),c),x,y,z),
+  sph:(g,r,c,x,y,z)=>natIn(g,natMesh(new THREE.SphereGeometry(r,9,7),c),x,y,z),
+  tor:(g,r,t2,c,x,y,z,rx)=>natIn(g,natMesh(new THREE.TorusGeometry(r,t2,8,18),c),x,y,z,rx),
+  cone:(g,r,h,c,x,y,z)=>natIn(g,natMesh(new THREE.ConeGeometry(r,h,8),c),x,y,z)
+};
+
+/* ---- shared frame 1: three themed answer STATIONS ---- */
+function actTrioStations(cfg){
+  const F=natFrame(cfg); if(!F) return;
+  const A=cfg.at, P=(lx,lz)=>F.L(A[0]+lx, A[1]+lz);
+  cityExitVehicle(true);
+  const sp0=P(0,-6);
+  CITY.player.group.position.set(sp0.x,0,sp0.z);
+  CITY.look.yaw=F.yaw+Math.PI; CITY.look.pitch=0;
+  const carryMode=cfg.mode==="carry", walkMode=cfg.mode==="walk";
+  const act={ round:0, total:cfg.rounds||3, right:0, carrying:false, allowInteract:true };
+  actStart(act);
+  const bp=P(0,10), board=actBoard(bp.x,6.6,bp.z,F.yaw+Math.PI); act.add(board);
+  const stations=[];
+  [-1,0,1].forEach((s,i)=>{
+    const p=P(s*6.5,4), g=new THREE.Group();
+    cfg.station(g,i);
+    g.position.set(p.x,0,p.z); g.rotation.y=F.yaw+Math.PI;
+    CITY.scene.add(g); act._cleanup.push(g); stations.push(g);
+  });
+  let carryM=null, srcP=null;
+  if(carryMode){
+    const sa=cfg.sourceAt||[11,-4];
+    srcP=P(sa[0],sa[1]);
+    const g=new THREE.Group(); cfg.source(g);
+    g.position.set(srcP.x,0,srcP.z); g.rotation.y=F.yaw+Math.PI; act.add(g);
+    const sl=makeTextSprite(cfg.sourceLabel||"press E to pick up",{px:28,scale:0.009});
+    sl.position.set(srcP.x,3.1,srcP.z); act.add(sl);
+    carryM=cfg.carry(); carryM.visible=false; act.add(carryM);
+  }
+  let labs=[];
+  function hud(){
+    actHUD(cfg.ico+" "+Math.min(act.round+1,act.total)+"/"+act.total+" · ✅ "+act.right+" · "+
+      (carryMode?(act.carrying?cfg.hintCarry:cfg.hintGrab):cfg.hint));
+  }
+  function newRound(){
+    act.item=cityDrawItem(); boardAsk(board,act.item);
+    labs.forEach(l=>CITY.scene.remove(l)); labs=[];
+    stations.forEach((g,i)=>{
+      const lab=ansSprite(act.item.answers[i]);
+      lab.position.set(g.position.x, cfg.labelY!==undefined?cfg.labelY:2.7, g.position.z);
+      CITY.scene.add(lab); labs.push(lab); act._cleanup.push(lab);
+    });
+    if(carryMode){ act.carrying=false; carryM.visible=false; }
+    act._lock=false; act._armed=false; hud();
+  }
+  function choose(i){
+    if(act._lock) return; act._lock=true;
+    act.round++;
+    const g=stations[i];
+    if(act.item.answers[i]===act.item.correct){
+      act.right++; cityQuizRight(); SND.correct&&SND.correct();
+      actPopup(cfg.popup||"✅ +12 🪙","#8ef0b5");
+      cityCelebrate(g.position.x,2,g.position.z);
+      cfg.onRight&&cfg.onRight(g);
+      setTimeout(next,750);
+    } else cityWrongModal(act.item, next);
+  }
+  function next(){
+    if(CITY.activity!==act) return;
+    if(act.round>=act.total)
+      actResult(cfg.title, act.right, act.total, act.right*(cfg.coins||12), cfg.outro||"");
+    else newRound();
+  }
+  if(!walkMode){
+    const TI=(o)=>{ o._nat=true; o.zone=cfg.zone||null; o.cond=()=>CITY.activity===act; CITY.interactables.push(o); };
+    stations.forEach((g,i)=>TI({x:g.position.x,z:g.position.z,r:2.5,icon:cfg.ico,
+      label:cfg.pressLabel||"this one!",
+      action:()=>{
+        if(carryMode&&!act.carrying){ cityToast(cfg.hintGrab); return; }
+        if(carryMode){ act.carrying=false; carryM.visible=false; }
+        choose(i);
+      }}));
+    if(carryMode) TI({x:srcP.x,z:srcP.z,r:2.6,icon:cfg.ico,label:cfg.sourceLabel,
+      action:()=>{
+        if(act.carrying){ cityToast("You're already carrying it — deliver it!"); return; }
+        if(act._lock) return;
+        act.carrying=true; carryM.visible=true; SND.tap&&SND.tap(); hud();
+      }});
+    act.cleanup=()=>{ CITY.interactables=CITY.interactables.filter(o=>!o._nat); };
+  }
+  newRound();
+  act.update=(dt,t)=>{
+    if(carryMode&&act.carrying){
+      const pp=CITY.player.group.position, f=CITY.player.group.rotation.y;
+      carryM.position.set(pp.x+Math.sin(f)*0.55, 1.25+Math.sin(t*6)*0.05, pp.z+Math.cos(f)*0.55);
+    }
+    if(walkMode&&!act._lock){
+      const pp=CITY.player.group.position;
+      let near=-1, allFar=true;
+      stations.forEach((g,i)=>{
+        const dd=dist2(pp.x,pp.z,g.position.x,g.position.z);
+        if(dd<2.3*2.3) near=i;
+        if(dd<4.5*4.5) allFar=false;
+      });
+      if(!act._armed){ if(allFar) act._armed=true; }
+      else if(near>=0) choose(near);
+    }
+    cfg.tick&&cfg.tick(stations,dt,t);
+  };
+}
+
+/* ---- shared frame 2: SHOOT the themed answer target ---- */
+function actTrioShoot(cfg){
+  const F=natFrame(cfg); if(!F) return;
+  const A=cfg.at, P=(lx,lz)=>F.L(A[0]+lx, A[1]+lz);
+  cityExitVehicle(true);
+  const sp0=P(0,-8);
+  CITY.player.group.position.set(sp0.x,0,sp0.z);
+  CITY.look.yaw=F.yaw+Math.PI; CITY.look.pitch=0.1;
+  const act={ round:0, total:cfg.rounds||3, right:0, aim:true };
+  actStart(act);
+  const bp=P(0,15), board=actBoard(bp.x,8.4,bp.z,F.yaw+Math.PI); act.add(board);
+  let targets=[];
+  function newRound(){
+    act.item=cityDrawItem(); boardAsk(board,act.item);
+    targets.forEach(g=>CITY.scene.remove(g)); targets=[];
+    [-1,0,1].forEach((s,i)=>{
+      const p=P(s*7,9), g=new THREE.Group();
+      cfg.target(g,i);
+      const lab=ansSprite(act.item.answers[i]);
+      lab.position.y=cfg.labelDY!==undefined?cfg.labelDY:1.7; g.add(lab);
+      g.position.set(p.x, cfg.targetY!==undefined?cfg.targetY:3, p.z); g.rotation.y=F.yaw+Math.PI;
+      CITY.scene.add(g); targets.push(g); act._cleanup.push(g);
+    });
+    actHUD(cfg.ico+" "+(act.round+1)+"/"+act.total+" · ✅ "+act.right+" · "+(cfg.hint||"aim with the camera, CLICK to fire!"));
+  }
+  let proj=null, pv=null, pd=0;
+  act.on("click",()=>{
+    if(proj||act._lock||!targets.length) return;
+    const pp=CITY.player.group.position;
+    proj=cfg.projectile(); proj.position.set(pp.x,1.6,pp.z); act.add(proj);
+    pv=aimDir().multiplyScalar(cfg.speed||26);
+    pd=0; SND.tap&&SND.tap();
+  });
+  function hit(i){
+    if(proj){ CITY.scene.remove(proj); proj=null; }
+    if(i<0){ SND.wrong&&SND.wrong(); cityToast(cfg.missToast||"💨 missed — line it up and fire again!"); return; }
+    act._lock=true; act.round++;
+    const tp=targets[i].position;
+    if(act.item.answers[i]===act.item.correct){
+      act.right++; cityQuizRight(); SND.correct&&SND.correct();
+      actPopup(cfg.popup||"🎯 +12 🪙","#8ef0b5");
+      cityCelebrate(tp.x,tp.y+0.8,tp.z);
+      setTimeout(next,750);
+    } else cityWrongModal(act.item, next);
+  }
+  function next(){
+    if(CITY.activity!==act) return;
+    act._lock=false;
+    if(act.round>=act.total)
+      actResult(cfg.title, act.right, act.total, act.right*(cfg.coins||12), cfg.outro||"");
+    else newRound();
+  }
+  newRound();
+  act.update=(dt,t)=>{
+    if(cfg.bob) targets.forEach((g,i)=>{ g.position.y=(cfg.targetY!==undefined?cfg.targetY:3)+Math.sin(t*1.5+i*2.1)*0.45; });
+    if(proj&&pv){
+      const steps=3, sdt=dt/steps;
+      for(let s2=0;s2<steps;s2++){
+        pv.y-=(cfg.gravity||0)*sdt;
+        proj.position.addScaledVector(pv,sdt); pd+=pv.length()*sdt;
+        for(let i=0;i<targets.length;i++)
+          if(proj.position.distanceTo(targets[i].position)<(cfg.hitR||2.1)) return hit(i);
+        if(proj.position.y<0.05||pd>75) return hit(-1);
+      }
+    }
+  };
+}
+
+/* ---------------- MOTOR MILE ---------------- */
+function startPitStop(){
+  actTrioStations({district:"motor", at:[-8,6], mode:"press", ico:"🔧",
+    title:"🔧 Pit stop complete!", popup:"🔧 BOLTED ON! +12 🪙",
+    hint:"press E at the tire stack with the RIGHT answer!", pressLabel:"bolt this tire on!",
+    station:(g)=>{ NB.cyl(g,0.65,0.65,0.5,0x14141c,0,0.25,0); NB.cyl(g,0.6,0.6,0.5,0x14141c,0,0.75,0);
+      NB.cyl(g,0.16,0.16,0.6,0x8a93ab,0,1.1,0); NB.box(g,1.7,0.45,0.9,0xff7a3d,0,1.5,0); }});
+}
+function startFuelRun(){
+  actTrioStations({district:"motor", at:[0,14], mode:"carry", ico:"⛽",
+    title:"⛽ Fuel Run done!", popup:"⛽ TANK FULL! +14 🪙", coins:14,
+    sourceLabel:"⛽ FUEL PUMP — press E to fill a can",
+    hintGrab:"grab a fuel can at the pump (E)!", hintCarry:"fuel the kart under the RIGHT answer (E)!",
+    pressLabel:"pour the fuel here",
+    source:(g)=>{ NB.box(g,1.1,2.2,0.8,0xd83a3a,0,1.1,0); NB.box(g,0.7,0.5,0.2,0x9ef0ff,0,1.7,0.45); },
+    carry:()=>natMesh(new THREE.BoxGeometry(0.5,0.6,0.35),0xd83a3a),
+    station:(g)=>{ NB.box(g,2.4,0.7,1.3,0x6ea8ff,0,0.75,0); NB.box(g,1.1,0.5,1.2,0x9ef0ff,0,1.3,-0.2);
+      [[-0.9,-0.55],[0.9,-0.55],[-0.9,0.55],[0.9,0.55]].forEach(([wx,wz])=>{
+        NB.cyl(g,0.32,0.32,0.3,0x14141c,wx,0.32,wz).rotation.z=Math.PI/2; }); }});
+}
+function startRampJump(){
+  actTrioStations({district:"motor", at:[8,6], mode:"walk", ico:"🛹",
+    title:"🛹 Ramp Rally done!", popup:"🛹 BIG AIR! +12 🪙",
+    hint:"RUN up the ramp with the RIGHT answer!", labelY:3.4,
+    station:(g)=>{ const r=natMesh(new THREE.BoxGeometry(3,0.25,4),0xff7a3d);
+      r.position.set(0,0.9,0); r.rotation.x=-0.45; g.add(r);
+      NB.box(g,3,0.2,0.6,0xffd75c,0,1.7,1.8); },
+    onRight:()=>{ if(CITY.player.vel) CITY.player.vel.y=8; }});
+}
+
+/* ---------------- SPACE PORT ---------------- */
+function startAsteroidBlast(){
+  actTrioShoot({district:"space", at:[-9,10], ico:"☄️",
+    title:"☄️ Asteroid field cleared!", popup:"☄️ BLASTED! +12 🪙",
+    hint:"aim at the asteroid with the RIGHT answer — CLICK to fire the plasma bolt!",
+    targetY:5, bob:true, speed:30,
+    target:(g)=>{ NB.sph(g,1.3,0x6a6a72,0,0,0).scale.set(1,0.82,0.9); NB.sph(g,0.5,0x8a93ab,0.9,0.5,0.3); },
+    projectile:()=>natMesh(new THREE.SphereGeometry(0.18,7,5),0x9ef0ff)});
+}
+function startMoonHop(){
+  actTrioStations({district:"space", at:[9,10], mode:"walk", ico:"🌙",
+    title:"🌙 Moon-hop complete!", popup:"🌙 PERFECT LANDING! +12 🪙",
+    hint:"hop into the crater with the RIGHT answer — low gravity, big jumps!", labelY:2.4,
+    station:(g)=>{ NB.tor(g,1.7,0.45,0xb8bdc8,0,0.18,0,Math.PI/2); NB.cyl(g,1.5,1.5,0.1,0x8a8f9a,0,0.08,0); },
+    onRight:()=>{ if(CITY.player.vel) CITY.player.vel.y=9; }});
+}
+function startSatAlign(){
+  actTrioStations({district:"space", at:[0,18], mode:"press", ico:"🛰️",
+    title:"🛰️ Satellites aligned!", popup:"🛰️ SIGNAL LOCKED! +12 🪙",
+    hint:"press E at the dish pointing to the RIGHT answer!", pressLabel:"lock this dish on",
+    station:(g)=>{ NB.cyl(g,0.12,0.16,2.4,0x8a93ab,0,1.2,0);
+      NB.cone(g,0.9,0.7,0xd8dde8,0,2.7,0).rotation.x=-2.3; NB.sph(g,0.12,0xff5d8a,0,3.0,0.3); }});
+}
+
+/* ---------------- FANTASY QUARTER ---------------- */
+function startRuneGates(){
+  actTrioStations({district:"fantasy", at:[-14,32], mode:"walk", ico:"🌀",
+    title:"🌀 Rune gates passed!", popup:"🌀 THE GATE GLOWS! +12 🪙",
+    hint:"walk through the rune arch with the TRUE answer!", labelY:3.2,
+    station:(g)=>{ NB.box(g,0.5,3,0.5,0x6a5a8a,-1.4,1.5,0); NB.box(g,0.5,3,0.5,0x6a5a8a,1.4,1.5,0);
+      NB.box(g,3.4,0.5,0.5,0x6a5a8a,0,3.1,0); NB.sph(g,0.2,0xb98bff,0,3.6,0); }});
+}
+function startWizardDuel(){
+  actTrioShoot({district:"fantasy", at:[-30,32], ico:"🪄",
+    title:"🪄 Duel won!", popup:"🪄 SPELL STRUCK TRUE! +12 🪙",
+    hint:"aim your wand at the sigil of the TRUE answer — CLICK to cast!",
+    targetY:4.2, bob:true, speed:26,
+    missToast:"✨ the spell fizzles past — take aim and cast again!",
+    target:(g)=>{ NB.tor(g,1.3,0.16,0xb98bff,0,0,0); NB.sph(g,0.35,0xffd75c,0,0,0); },
+    projectile:()=>natMesh(new THREE.SphereGeometry(0.2,7,5),0xb98bff)});
+}
+
+/* ---------------- WILDWOOD ---------------- */
+function startCampCook(){
+  actTrioStations({district:"wild", at:[-8,30], mode:"carry", ico:"🍲",
+    title:"🍲 Camp stew served!", popup:"🍲 DELICIOUS! +14 🪙", coins:14,
+    sourceLabel:"🎒 SUPPLY PACK — press E to grab an ingredient",
+    hintGrab:"grab an ingredient from the supply pack (E)!",
+    hintCarry:"drop it in the pot under the RIGHT answer (E)!",
+    pressLabel:"toss it in this pot",
+    source:(g)=>{ NB.box(g,1.2,1.4,0.7,0x7a5a3a,0,0.7,0); NB.box(g,1.0,0.4,0.6,0x5a8a4a,0,1.5,0); },
+    carry:()=>natMesh(new THREE.SphereGeometry(0.28,8,6),0xd8b84a),
+    station:(g)=>{ NB.cyl(g,0.8,0.6,0.8,0x2a2f45,0,1.0,0); NB.cone(g,0.5,0.5,0xff7a3d,0,0.3,0);
+      NB.cyl(g,0.06,0.06,1.6,0x5a4a35,0,0.8,0).rotation.z=0.5; }});
+}
+function startCreekHop(){
+  actTrioStations({district:"wild", at:[8,30], mode:"walk", ico:"🪨",
+    title:"🪨 Creek crossed!", popup:"🪨 DRY BOOTS! +12 🪙",
+    hint:"hop onto the stepping stone with the RIGHT answer!", labelY:2.2,
+    station:(g)=>{ NB.sph(g,1.1,0x8a93ab,0,0.15,0).scale.y=0.35; NB.sph(g,0.5,0x9aa3b8,0.9,0.15,0.5).scale.y=0.3; }});
+}
+
+/* ---------------- ZOO GARDENS ---------------- */
+function startZooToss(){
+  actTrioShoot({district:"zoo", at:[-4,44], ico:"🍎",
+    title:"🍎 Snack time over!", popup:"🍎 CHOMP! +12 🪙",
+    hint:"toss the snack into the feeding bin with the RIGHT answer!",
+    targetY:1.6, speed:20, gravity:14, hitR:1.9, labelDY:2.2,
+    target:(g)=>{ NB.box(g,2.0,1.1,2.0,0x8a6a45,0,0,0); NB.box(g,1.6,0.2,1.6,0xd8b860,0,0.5,0); },
+    projectile:()=>natMesh(new THREE.SphereGeometry(0.2,7,5),0xd83a3a)});
+}
+function startAnimalRescue(){
+  actTrioStations({district:"zoo", at:[-20,44], mode:"carry", ico:"🦺",
+    title:"🦺 Rescue mission done!", popup:"🦺 SAFE AND SOUND! +14 🪙", coins:14,
+    sourceLabel:"🦺 RESCUE CRATE — press E to pick up the animal",
+    hintGrab:"pick up the rescued animal at the crate (E)!",
+    hintCarry:"carry it to the habitat with the RIGHT answer (E)!",
+    pressLabel:"release it in this habitat",
+    source:(g)=>{ NB.box(g,1.3,1.0,1.0,0xb8905a,0,0.5,0); NB.box(g,1.3,0.12,1.0,0x8a6a45,0,1.06,0); },
+    carry:()=>natMesh(new THREE.SphereGeometry(0.3,8,6),0xffc24d),
+    station:(g)=>{ [[-1.2,0],[1.2,0],[0,-1.2],[0,1.2]].forEach(([fx,fz])=>{
+        NB.box(g,fz?2.6:0.15,1.0,fz?0.15:2.6,0x8a6a45,fx,0.5,fz); });
+      NB.sph(g,0.4,0x57d98a,0,0.2,0).scale.y=0.3; }});
+}
+function startTrackPads(){
+  actTrioStations({district:"zoo", at:[-12,56], mode:"walk", ico:"🐾",
+    title:"🐾 Tracks read!", popup:"🐾 TRACKED IT! +12 🪙",
+    hint:"follow the trail — stand on the paw-print pad with the RIGHT answer!", labelY:2.2,
+    station:(g)=>{ NB.cyl(g,1.3,1.4,0.16,0x6a5a45,0,0.08,0);
+      NB.sph(g,0.28,0x3a3025,0,0.18,0.2).scale.y=0.2;
+      [[-0.35,0.62],[0,0.72],[0.35,0.62]].forEach(([px,pz])=>{ NB.sph(g,0.12,0x3a3025,px,0.18,pz).scale.y=0.2; }); }});
+}
+
+/* ---------------- AQUATIC COVE ---------------- */
+function startReefRings(){
+  actTrioStations({district:"aqua", at:[0,50], mode:"walk", ico:"🪸",
+    title:"🪸 Snorkel run done!", popup:"🪸 SPARKLING! +12 🪙",
+    hint:"swim through the coral ring with the RIGHT answer!", labelY:3.0,
+    station:(g)=>{ NB.tor(g,1.4,0.2,0xff8bd8,0,1.6,0); NB.cone(g,0.25,0.9,0xff5d8a,-1.2,0.45,0.3); NB.cone(g,0.2,0.7,0xffa53d,1.1,0.35,-0.2); }});
+}
+function startBubblePop(){
+  actTrioShoot({district:"aqua", at:[16,50], ico:"🫧",
+    title:"🫧 Bubbles popped!", popup:"🫧 POP! +12 🪙",
+    hint:"aim at the giant bubble with the RIGHT answer — CLICK to pop it!",
+    targetY:4.5, bob:true, speed:28, hitR:2.3,
+    target:(g)=>{ const b=natMesh(new THREE.SphereGeometry(1.6,12,10),0x9adcf0);
+      b.material.transparent=true; b.material.opacity=0.4; g.add(b); },
+    projectile:()=>natMesh(new THREE.SphereGeometry(0.16,7,5),0x37d0e0)});
+}
+function startDockDelivery(){
+  actTrioStations({district:"aqua", at:[-8,50], mode:"carry", ico:"📦",
+    title:"📦 Harbor delivery done!", popup:"📦 SHIPPED! +14 🪙", coins:14,
+    sourceLabel:"📦 CARGO CRATES — press E to lift one",
+    hintGrab:"grab a crate from the cargo pile (E)!",
+    hintCarry:"load the boat flying the RIGHT answer flag (E)!",
+    pressLabel:"load this boat",
+    source:(g)=>{ NB.box(g,1.2,1.0,1.0,0xb8905a,0,0.5,0); NB.box(g,0.9,0.8,0.8,0xa8825a,0.9,0.4,0.5); },
+    carry:()=>natMesh(new THREE.BoxGeometry(0.55,0.5,0.5),0xb8905a),
+    station:(g)=>{ NB.box(g,1.6,0.7,3.0,0x3f8ad9,0,0.55,0); NB.box(g,1.2,0.5,1.0,0xd8dde8,0,1.1,-0.4);
+      NB.cyl(g,0.05,0.05,2.2,0x8a93ab,0,1.8,0.8); NB.box(g,0.8,0.5,0.06,0xffd75c,0.45,2.5,0.8); }});
+}
+
+/* ---------------- FASHION DISTRICT ---------------- */
+function startWindowPick(){
+  actTrioStations({district:"fashion", at:[6,54], mode:"press", ico:"🪞",
+    title:"🪞 Window display set!", popup:"🪞 STUNNING! +12 🪙",
+    hint:"press E at the display window with the RIGHT answer!", pressLabel:"spotlight this display",
+    station:(g)=>{ NB.box(g,2.6,3.2,0.25,0x2a2f45,0,1.6,-0.5);
+      NB.box(g,2.2,2.6,0.1,0x9ef0ff,0,1.7,-0.42).material.transparent=true;
+      NB.cyl(g,0.3,0.4,1.1,0xff8bd8,0,1.0,0.2); NB.sph(g,0.22,0xf0d0b0,0,1.8,0.2); }});
+}
+function startColorRack(){
+  actTrioStations({district:"fashion", at:[22,54], mode:"carry", ico:"👕",
+    title:"👕 Racks sorted!", popup:"👕 PERFECT MATCH! +14 🪙", coins:14,
+    sourceLabel:"🧺 STYLE BIN — press E to grab the garment",
+    hintGrab:"grab the next garment from the style bin (E)!",
+    hintCarry:"hang it on the rack with the RIGHT answer (E)!",
+    pressLabel:"hang it on this rack",
+    source:(g)=>{ NB.cyl(g,0.8,0.6,0.9,0xff8bd8,0,0.45,0); },
+    carry:()=>natMesh(new THREE.BoxGeometry(0.5,0.6,0.12),0xb98bff),
+    station:(g)=>{ NB.cyl(g,0.06,0.08,2.2,0x8a93ab,-1.1,1.1,0); NB.cyl(g,0.06,0.08,2.2,0x8a93ab,1.1,1.1,0);
+      NB.cyl(g,0.05,0.05,2.2,0x8a93ab,0,2.2,0).rotation.z=Math.PI/2;
+      [[-0.6,0xff5d8a],[0,0x9ef0ff],[0.6,0xffd75c]].forEach(([hx,hc])=>{ NB.box(g,0.4,0.55,0.1,hc,hx,1.8,0); }); }});
+}
+
+/* ---------------- ART & MUSEUM QUARTER ---------------- */
+function startGalleryHang(){
+  actTrioStations({district:"art", at:[-8,48], mode:"carry", ico:"🖼️",
+    title:"🖼️ Gallery curated!", popup:"🖼️ MASTERPIECE! +14 🪙", coins:14,
+    sourceLabel:"🖼️ ART CRATE — press E to lift the painting",
+    hintGrab:"pick up the new painting at the art crate (E)!",
+    hintCarry:"hang it on the easel with the RIGHT answer (E)!",
+    pressLabel:"hang the painting here",
+    source:(g)=>{ NB.box(g,1.4,1.1,0.5,0xb8905a,0,0.55,0); },
+    carry:()=>natMesh(new THREE.BoxGeometry(0.7,0.55,0.08),0xffa53d),
+    station:(g)=>{ NB.cyl(g,0.05,0.07,2.6,0x8a6a45,-0.5,1.3,0).rotation.z=0.22;
+      NB.cyl(g,0.05,0.07,2.6,0x8a6a45,0.5,1.3,0).rotation.z=-0.22;
+      NB.cyl(g,0.05,0.07,2.4,0x8a6a45,0,1.2,-0.25).rotation.x=0.3;
+      NB.box(g,1.5,1.1,0.08,0xf0ead8,0,1.7,0.1); }});
+}
+function startStatuePose(){
+  actTrioStations({district:"art", at:[8,48], mode:"press", ico:"🗿",
+    title:"🗿 Statue unveiled!", popup:"🗿 A CLASSIC! +12 🪙",
+    hint:"press E to unveil the statue holding the RIGHT answer!", pressLabel:"unveil this statue",
+    station:(g)=>{ NB.box(g,1.4,0.8,1.4,0x9aa3b8,0,0.4,0);
+      NB.cyl(g,0.3,0.4,1.2,0xd8dde8,0,1.4,0); NB.sph(g,0.28,0xd8dde8,0,2.2,0);
+      NB.box(g,0.9,0.14,0.3,0xd8dde8,0.5,1.8,0).rotation.z=0.5; }});
+}
+
+/* ---------------- SUNNY ACRES FARM ---------------- */
+function startHayToss(){
+  actTrioShoot({district:"farm", at:[-22,34], ico:"🌾",
+    title:"🌾 Hay stacked!", popup:"🌾 RIGHT WAGON! +12 🪙",
+    hint:"pitch the hay bale into the wagon with the RIGHT answer!",
+    targetY:1.5, speed:18, gravity:13, hitR:2.0, labelDY:2.4,
+    target:(g)=>{ NB.box(g,2.4,1.0,1.6,0x8a4a38,0,0,0);
+      [[-1.0,-0.9],[1.0,-0.9],[-1.0,0.9],[1.0,0.9]].forEach(([wx,wz])=>{
+        NB.cyl(g,0.4,0.4,0.25,0x3a3025,wx,-0.5,wz).rotation.z=Math.PI/2; }); },
+    projectile:()=>natMesh(new THREE.BoxGeometry(0.45,0.35,0.35),0xd8b860)});
+}
+
+/* ---------------- GLACIER ISLE (native replacements for the 03x pads) ---------------- */
+function startIceTargets(){
+  actTrioShoot({world:"ice", zone:"ice", at:[-22,8], ico:"❄️",
+    title:"❄️ Ice range cleared!", popup:"❄️ BULLSEYE! +12 🪙",
+    hint:"pack a snowball — CLICK to hit the ice target with the RIGHT answer!",
+    targetY:3.4, bob:true, speed:26,
+    target:(g)=>{ NB.tor(g,1.2,0.22,0x9ef0ff,0,0,0); NB.cyl(g,0.8,0.8,0.2,0xdff2ff,0,0,0).rotation.x=Math.PI/2; },
+    projectile:()=>natMesh(new THREE.SphereGeometry(0.2,8,6),0xffffff)});
+}
+function startFrozenShot(){
+  actTrioShoot({world:"ice", zone:"ice", at:[22,8], ico:"🏀",
+    title:"🏀 Frozen free-throw done!", popup:"🏀 SWISH! +12 🪙",
+    hint:"lob the snowball INTO the ice hoop with the RIGHT answer!",
+    targetY:3.8, speed:17, gravity:11, hitR:1.6,
+    target:(g)=>{ NB.tor(g,0.9,0.14,0xff7a3d,0,0,0,Math.PI/2); NB.cyl(g,0.14,0.18,3.6,0xbfe4ff,0,-1.9,0); },
+    projectile:()=>natMesh(new THREE.SphereGeometry(0.2,8,6),0xffffff)});
+}
+function startSnowFort(){
+  actTrioStations({world:"ice", zone:"ice", at:[-22,-20], mode:"carry", ico:"🧱",
+    title:"🧱 Snow fort built!", popup:"🧱 WALL UP! +14 🪙", coins:14,
+    sourceLabel:"🧊 SNOW PILE — press E to cut a block",
+    hintGrab:"cut a snow block from the pile (E)!",
+    hintCarry:"stack it on the fort wall with the RIGHT answer (E)!",
+    pressLabel:"stack the block here",
+    source:(g)=>{ NB.sph(g,1.0,0xffffff,0,0.4,0).scale.y=0.6; },
+    carry:()=>natMesh(new THREE.BoxGeometry(0.6,0.45,0.45),0xf2f7fd),
+    station:(g)=>{ NB.box(g,2.6,1.0,0.7,0xe8f2fc,0,0.5,0);
+      NB.box(g,0.8,0.5,0.7,0xffffff,-0.8,1.25,0); NB.box(g,0.8,0.5,0.7,0xffffff,0.8,1.25,0); }});
+}
+function startFrostSlide(){
+  actTrioStations({world:"ice", zone:"ice", at:[22,-20], mode:"walk", ico:"🐍",
+    title:"🐍 Frost Serpent fed!", popup:"🐍 SSSUPER! +12 🪙",
+    hint:"slide through the ice arch with the RIGHT answer — the serpent follows the truth!", labelY:3.2,
+    station:(g)=>{ NB.tor(g,1.6,0.25,0xbfe4ff,0,1.6,0); NB.cone(g,0.35,1.4,0x9ef0ff,-1.8,0.7,0); NB.cone(g,0.35,1.4,0x9ef0ff,1.8,0.7,0); }});
+}
+
+/* ---------------- EMBER ISLE (native replacements for the 03x pads) ---------------- */
+function startLavaDash(){
+  actTrioStations({world:"lava", zone:"lava", at:[-24,12], mode:"walk", ico:"🏃",
+    title:"🏃 Lava Dash survived!", popup:"🏃 COOL FOOTWORK! +12 🪙",
+    hint:"dash onto the cooled-crust plate with the RIGHT answer — the rest is HOT!", labelY:2.3,
+    station:(g)=>{ NB.cyl(g,1.4,1.5,0.2,0x2a1a1c,0,0.1,0); NB.tor(g,1.45,0.1,0xff8a2a,0,0.22,0,Math.PI/2); }});
+}
+function startGeyserJump(){
+  actTrioStations({world:"lava", zone:"lava", at:[24,12], mode:"walk", ico:"🌋",
+    title:"🌋 Geyser run done!", popup:"🌋 LAUNCHED! +12 🪙",
+    hint:"jump onto the steam vent with the RIGHT answer — it boosts you sky-high!", labelY:2.4,
+    station:(g)=>{ NB.cyl(g,1.0,1.3,0.5,0x35242a,0,0.25,0); NB.cyl(g,0.5,0.7,0.3,0xff8a2a,0,0.6,0); },
+    onRight:()=>{ if(CITY.player.vel) CITY.player.vel.y=10; }});
+}
+function startCraterToss(){
+  actTrioShoot({world:"lava", zone:"lava", at:[-24,-16], ico:"🪨",
+    title:"🪨 Crater Cross done!", popup:"🪨 DEAD CENTER! +12 🪙",
+    hint:"hurl the boulder into the crater with the RIGHT answer!",
+    targetY:1.4, speed:19, gravity:13, hitR:2.0, labelDY:2.2,
+    target:(g)=>{ NB.cyl(g,1.5,1.8,1.0,0x3a2426,0,0,0); NB.cyl(g,1.1,1.1,0.2,0xff6a2a,0,0.45,0); },
+    projectile:()=>natMesh(new THREE.SphereGeometry(0.24,7,5),0x6a6a72)});
+}
+function startEmberDrums(){
+  actTrioStations({world:"lava", zone:"lava", at:[24,-16], mode:"press", ico:"🥁",
+    title:"🥁 Ember Beat played!", popup:"🥁 BOOM! +12 🪙",
+    hint:"press E on the obsidian drum with the RIGHT answer — feel the rumble!",
+    pressLabel:"strike this drum",
+    station:(g)=>{ NB.cyl(g,0.9,1.1,1.1,0x1a1420,0,0.55,0); NB.cyl(g,0.85,0.85,0.1,0xff8a2a,0,1.15,0); }});
+}
+
+/* the ice/lava venue pads (built read-only in 03x-extra) now launch these
+   native games instead of 2D templates — looked up by zone:label in cityVenuePad */
+const CITY_PAD_NATIVE={
+  "ice:Ice Target Range":()=>startIceTargets(),
+  "ice:Frozen Free-Throw":()=>startFrozenShot(),
+  "ice:Snow-Fort Defense":()=>startSnowFort(),
+  "ice:Frost Serpent":()=>startFrostSlide(),
+  "lava:Lava Dash":()=>startLavaDash(),
+  "lava:Magma Jetpack":()=>startGeyserJump(),
+  "lava:Crater Cross":()=>startCraterToss(),
+  "lava:Ember Beat":()=>startEmberDrums()
+};
+
+/* ---------------- native game card per district (venue modal) ---------------- */
+const NATIVE_GAME_MENU={
+  sports:[["⚽","Penalty Shootout","5 shots at the answer zones",()=>startZoneShot("penalty")],
+          ["🏒","Slapshot Quiz","5 slapshots on the rink",()=>startZoneShot("hockey")],
+          ["🏀","Free-Throw Challenge","8 shots + brain boost",()=>startHoops()],
+          ["⚾","Home-Run Derby","8 pitches into the answer field",()=>startDerby()],
+          ["🏈","Field-Goal Rings","6 throws through the rings",()=>startAimTrio("foot")]],
+  motor:[["🏁","Answer-Gate Grand Prix","2 laps of answer gates",()=>startRace()],
+         ["🔧","Pit-Stop Wrench","bolt the right tire on",()=>startPitStop()],
+         ["⛽","Fuel Run","fuel the kart under the right answer",()=>startFuelRun()],
+         ["🛹","Ramp Rally","hit the right ramp, catch air",()=>startRampJump()]],
+  space:[["🚀","Launch to Mars","6 systems green = liftoff",()=>startLaunch()],
+         ["☄️","Asteroid Answer-Blast","blast the right rock",()=>startAsteroidBlast()],
+         ["🌙","Moon-Hop Craters","bounce into the right crater",()=>startMoonHop()],
+         ["🛰️","Satellite Align","lock the right dish on",()=>startSatAlign()]],
+  fantasy:[["🧪","Potion Lab","4 true ingredients",()=>startPotion()],
+           ["🐉","Dragon Sky-Rings","fly the sky trial",()=>startDragonRings()],
+           ["🌀","Rune Gates","walk the true arch",()=>startRuneGates()],
+           ["🪄","Wizard Duel","cast at the true sigil",()=>startWizardDuel()]],
+  wild:[["🏹","Archery Range","6 arrows at the answers",()=>startAimTrio("arch")],
+        ["🍲","Campfire Cook-Off","the right ingredient in the right pot",()=>startCampCook()],
+        ["🪨","Creek Stone Hop","hop the right stepping stone",()=>startCreekHop()]],
+  zoo:[["🍎","Snack Toss","toss food into the right bin",()=>startZooToss()],
+       ["🦺","Animal Rescue","carry the cub to the right habitat",()=>startAnimalRescue()],
+       ["🐾","Track Reader","stand on the right paw pad",()=>startTrackPads()]],
+  aqua:[["🤿","Sub Dive","drive the sub through 10 bubbles",()=>startDive()],
+        ["🫧","Bubble Pop","pop the right giant bubble",()=>startBubblePop()],
+        ["🪸","Reef Ring Swim","swim the right coral ring",()=>startReefRings()],
+        ["📦","Harbor Delivery","load the right boat",()=>startDockDelivery()]],
+  fashion:[["👗","Runway Style Show","strut through the answer you trust",()=>startRunway()],
+           ["🪞","Window Display","spotlight the right window",()=>startWindowPick()],
+           ["👕","Color-Match Rack","hang it on the right rack",()=>startColorRack()]],
+  art:[["🖍️","Coloring Studio","earn every color by answering",()=>openColoringGated()],
+       ["🎨","Paint Studio","mix colors by the numbers",()=>{ if(SPOTS.paintmix) enterInterior("paint",{name:"the Paint Studio",ret:{x:SPOTS.paintmix.x,z:SPOTS.paintmix.z+2,yaw:Math.PI}}); else cityToast("🎨 Find the Paint Studio in the quarter!"); }],
+       ["🖼️","Gallery Hang","hang the answer painting",()=>startGalleryHang()],
+       ["🗿","Statue Unveiling","unveil the true statue",()=>startStatuePose()]],
+  farm:[["🌾","Feed Run","scoop & serve the right trough",()=>startFarmFeed()],
+        ["🌾","Hay-Bale Toss","pitch hay into the right wagon",()=>startHayToss()]],
+};
+function openNativeVenue(key, title, sub){
+  const list=NATIVE_GAME_MENU[key]||[];
+  const m=cityModal(title||"District games", sub||"native games — played right here in the world",
+    `<div style="text-align:center;background:rgba(142,240,181,.08);border:1px solid rgba(142,240,181,.3);border-radius:11px;padding:8px 12px;margin-bottom:10px;font-size:13.5px;font-weight:800">
+       📖 Practicing: <span style="color:#8ef0b5">${cityTopicLabel()}</span></div>
+     <div id="nv-grid" class="cgrid"></div>
+     <div style="text-align:center;font-size:12px;color:#9aa3d0;margin-top:6px">…and keep exploring — beams around this neighborhood hide even more</div>`,{id:"venue"});
+  const grid=m.querySelector("#nv-grid");
+  list.forEach(([ico,name,ref,fn])=>{
+    const card=document.createElement("div"); card.className="citem";
+    card.innerHTML=`<div class="ic">${ico}</div><h4>${name}</h4>
+      <div style="font-size:11px;color:#9aa3d0">${ref}</div>
+      <button class="cbtn buy" style="margin-top:6px">▶ Play</button>`;
+    card.querySelector("button").onclick=()=>{ cityCloseMenu(true); fn(); };
+    grid.appendChild(card);
+  });
+}
+
+/* ---------------- glowing beams for the NEW native games ---------------- */
+const NATIVE_BEACONS={
+  motor:[[-8,6,"🔧","Pit-Stop Wrench — bolt the right tire!",()=>startPitStop(),0xff7a3d],
+         [0,14,"⛽","Fuel Run — fuel the right kart!",()=>startFuelRun(),0xd83a3a],
+         [8,6,"🛹","Ramp Rally — hit the right ramp!",()=>startRampJump(),0xffd75c]],
+  space:[[-9,10,"☄️","Asteroid Answer-Blast",()=>startAsteroidBlast(),0x9ef0ff],
+         [9,10,"🌙","Moon-Hop Craters",()=>startMoonHop(),0xd8dde8],
+         [0,18,"🛰️","Satellite Align",()=>startSatAlign(),0x6ea8ff]],
+  fantasy:[[-14,32,"🌀","Rune Gates — walk the true arch",()=>startRuneGates(),0xb98bff],
+           [-30,32,"🪄","Wizard Duel — cast at the true sigil",()=>startWizardDuel(),0xffd75c]],
+  wild:[[-8,30,"🍲","Campfire Cook-Off",()=>startCampCook(),0xff7a3d],
+        [8,30,"🪨","Creek Stone Hop",()=>startCreekHop(),0x9aa3b8]],
+  zoo:[[-4,44,"🍎","Snack Toss",()=>startZooToss(),0xd83a3a],
+       [-20,44,"🦺","Animal Rescue",()=>startAnimalRescue(),0xffc24d],
+       [-12,56,"🐾","Track Reader",()=>startTrackPads(),0x8a6a45]],
+  aqua:[[0,50,"🪸","Reef Ring Swim",()=>startReefRings(),0xff8bd8],
+        [16,50,"🫧","Bubble Pop",()=>startBubblePop(),0x37d0e0],
+        [-8,50,"📦","Harbor Delivery",()=>startDockDelivery(),0xb8905a]],
+  fashion:[[6,54,"🪞","Window Display",()=>startWindowPick(),0x9ef0ff],
+           [22,54,"👕","Color-Match Rack",()=>startColorRack(),0xff8bd8]],
+  art:[[-8,48,"🖼️","Gallery Hang",()=>startGalleryHang(),0xffa53d],
+       [8,48,"🗿","Statue Unveiling",()=>startStatuePose(),0xd8dde8]],
+  farm:[[-22,34,"🌾","Hay-Bale Toss",()=>startHayToss(),0xd8b860]],
+};
+function cityBuildNativeBeacons(){
+  const B=new GeoBatch(), G=new GeoBatch();
+  DISTRICTS.forEach(d=>{
+    (NATIVE_BEACONS[d.key]||[]).forEach(([lx,lz,ico,label,fn,acc])=>{
+      const F=districtFrame(d), p=F.L(lx,lz);
+      B.cyl(1.3,1.5,0.28,0x8a93ab,p.x,0.14,p.z,10);
+      G.tor(1.28,0.06,acc,p.x,0.3,p.z,Math.PI/2);
+      B.cyl(0.08,0.1,2.6,0x3a3f55,p.x,1.3,p.z,6);
+      G.sph(0.2,acc,p.x,2.8,p.z,7,5);
+      const sp=makeTextSprite(ico+" "+label.split("—")[0].trim(),{px:28,scale:0.0095});
+      sp.position.set(p.x,3.8,p.z); CITY.scene.add(sp);
+      CITY.interactables.push({x:p.x,z:p.z,r:3.2,icon:ico,label:label+" — play!",
+        cond:()=>!CITY.activity, action:fn});
+    });
+  });
+  CITY.scene.add(B.build()); CITY.scene.add(G.build({glow:true}));
 }
 
 
@@ -21310,7 +21911,7 @@ function cityInitTouch(){
    10-init: wire the city into the platform (monkey-patches) + enter/exit flow
    ============================================================================ */
 
-const CITY_BUILD="r24-playtest (43-item playtest batch: sports overhaul, island worlds, real collision, arcade fixes, character polish)";
+const CITY_BUILD="r25-districts (every district has its own native themed games; the 2D arcade lives only in the Arcade)";
 try{ console.log("%c🌆 Learning City "+CITY_BUILD, "font-weight:bold;color:#57d98a"); }catch(e){}
 let _cityBuilt=false;
 CITY.enter=function(){
