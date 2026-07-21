@@ -33,6 +33,8 @@ body{
 .screen{position:absolute;inset:0;display:none;flex-direction:column;animation:fade .35s ease}
 .screen.active{display:flex}
 @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+/* r24: guided-tutorial pulse (Lane Defense wave 1, etc.) */
+@keyframes tutpulse{0%,100%{box-shadow:0 0 0 3px rgba(255,207,92,.95)}50%{box-shadow:0 0 0 10px rgba(255,207,92,0)}}
 button{font-family:inherit;cursor:pointer;border:none}
 .btn{
   background:linear-gradient(180deg,var(--accent),#4d84e6);color:#fff;font-weight:800;
@@ -3733,32 +3735,54 @@ const PROFILE = loadProfile() || {
    Shared by all 16 games via levelTick / LOG.record / endSession.
    ============================================================ */
 function todayKey(){ const d=new Date(); return d.getFullYear()+"-"+(d.getMonth()+1)+"-"+d.getDate(); }
+/* r24: ADAPTIVE quest pool — targets scale with the player's own stats (PROFILE +
+   session history), plus harder quest types. Each day's picked quests freeze their
+   computed target/name into PROFILE.daily.meta so mid-day stat changes don't move
+   the goalposts. Rewards stay proportional (harder quests pay more). */
+function qAvgRounds(){ try{ const a=_kv.get("tlp_sessions",[]); if(!a.length) return 2;
+  const days={}; a.forEach(r=>{ const k=new Date(r.d).toDateString(); days[k]=(days[k]||0)+1; });
+  const v=Object.values(days); return v.reduce((x,y)=>x+y,0)/v.length; }catch(e){ return 2; } }
 const QUEST_POOL=[
-  {id:'q_games', icon:'🎮', name:'Play 3 rounds today',           target:3},
-  {id:'q_streak',icon:'🔥', name:'Hit a 6-answer streak',          target:1},
-  {id:'q_comp',  icon:'🧩', name:'Finish a comprehension game',    target:1},
-  {id:'q_acc',   icon:'⚡', name:'Score 80%+ first-try in a round',target:1},
-  {id:'q_two',   icon:'🗺️', name:'Play 2 different games',         target:2},
-  {id:'q_pts',   icon:'⭐', name:'Earn 120 points today',          target:120},
+  {id:'q_games', icon:'🎮', rew:50, mk:p=>{ const n=Math.max(3,Math.min(6,Math.round(qAvgRounds())+1));
+      return {target:n, name:'Play '+n+' rounds today'}; }},
+  {id:'q_streak',icon:'🔥', rew:50, mk:p=>{ const n=Math.max(6,Math.min(10,p.bestStreak||6));
+      return {target:1, thr:n, name:'Hit a '+n+'-answer streak'}; }},
+  {id:'q_comp',  icon:'🧩', rew:50, mk:p=>({target:1, name:'Finish a comprehension game'})},
+  {id:'q_acc',   icon:'⚡', rew:50, mk:p=>{ const n=Math.min(95,Math.max(80,Math.round((p.bestAcc||80)-5)));
+      return {target:1, thr:n, name:'Score '+n+'%+ first-try in a round'}; }},
+  {id:'q_two',   icon:'🗺️', rew:50, mk:p=>{ const n=(p.sessions||0)>=5?3:2;
+      return {target:n, name:'Play '+n+' different games'}; }},
+  {id:'q_pts',   icon:'⭐', rew:50, mk:p=>{ const n=Math.min(300,120+Math.round(qAvgRounds()*30));
+      return {target:n, name:'Earn '+n+' points today'}; }},
+  // harder quest types (r24)
+  {id:'q_zero',  icon:'💎', rew:70, mk:p=>({target:1, name:'Finish a round with 0 misses'})},
+  {id:'q_m8',    icon:'🏅', rew:70, mk:p=>({target:1, name:'Master streak: reach 8 in a row'})},
 ];
 function dailyQuests(){ const t=todayKey();
-  if(!PROFILE.daily || PROFILE.daily.date!==t){
+  if(!PROFILE.daily || PROFILE.daily.date!==t || !PROFILE.daily.meta){
     const h=[...t].reduce((a,c)=>a+c.charCodeAt(0),0);
-    const picks=[0,1,2,3,4,5].sort((a,b)=>((a*7+h)%11)-((b*7+h)%11)).slice(0,3);
-    PROFILE.daily={date:t, q:picks.map(i=>QUEST_POOL[i].id), prog:{}, done:[], tpls:[], bonus:false};
+    const picks=QUEST_POOL.map((_,i)=>i).sort((a,b)=>((a*7+h)%11)-((b*7+h)%11)).slice(0,3);
+    const meta={}; picks.forEach(i=>{ const q=QUEST_POOL[i];
+      try{ meta[q.id]=q.mk(PROFILE); }catch(e){ meta[q.id]={target:1,name:q.id}; } });
+    PROFILE.daily={date:t, q:picks.map(i=>QUEST_POOL[i].id), meta, prog:{}, done:[], tpls:[], bonus:false};
     saveProfile(); }
   return PROFILE.daily; }
 function questUpdate(sum, earned){ const d=dailyQuests(); const out=[];
+  const M=d.meta||{};
   if(!d.tpls.includes(sum.template)) d.tpls.push(sum.template);
   d.prog.q_games=(d.prog.q_games||0)+1;
   d.prog.q_two=d.tpls.length;
   d.prog.q_pts=(d.prog.q_pts||0)+earned;
-  if(sum.bestStreak>=6) d.prog.q_streak=1;
+  if(sum.bestStreak>=((M.q_streak&&M.q_streak.thr)||6)) d.prog.q_streak=1;
+  if(sum.bestStreak>=8) d.prog.q_m8=1;
   if(sum.family==='comp') d.prog.q_comp=1;
-  if(sum.attempted && sum.firstTry/sum.attempted>=0.8) d.prog.q_acc=1;
+  if(sum.attempted && 100*sum.firstTry/sum.attempted>=((M.q_acc&&M.q_acc.thr)||80)) d.prog.q_acc=1;
+  if(sum.attempted>=4 && sum.firstTry===sum.attempted) d.prog.q_zero=1;
   d.q.forEach(id=>{ if(!d.done.includes(id)){ const q=QUEST_POOL.find(x=>x.id===id);
-    if((d.prog[id]||0)>=q.target){ d.done.push(id); PROFILE.points+=50; out.push(q); } }});
-  if(d.done.length>=3 && !d.bonus){ d.bonus=true; PROFILE.points+=100; out.push({icon:'👑',name:'ALL quests done — +100 bonus!'}); }
+    const tgt=(M[id]&&M[id].target)||1;
+    if((d.prog[id]||0)>=tgt){ d.done.push(id); const rw=(q&&q.rew)||50; PROFILE.points+=rw;
+      out.push({icon:q?q.icon:'⭐', name:(M[id]&&M[id].name)||id, rew:rw}); } }});
+  if(d.done.length>=3 && !d.bonus){ d.bonus=true; PROFILE.points+=100; out.push({icon:'👑',name:'ALL quests done — +100 bonus!',rew:100}); }
   saveProfile(); return out; }
 function bumpStreakDays(){ const t=todayKey(); if(PROFILE.lastPlay===t) return;
   const y=new Date(Date.now()-86400000); const yk=y.getFullYear()+"-"+(y.getMonth()+1)+"-"+y.getDate();
@@ -4298,9 +4322,11 @@ function promptBanner(host){ const b=el("div","promptbanner"); host.appendChild(
    Arcade loops multiply their motion by ctx.speed.v (live).
    ============================================================ */
 const SPEEDS=[{k:"slow",label:"🐢 Slow",v:0.55},{k:"normal",label:"🚶 Normal",v:0.8},{k:"fast",label:"⚡ Fast",v:1.2}];
-function speedBar(ref, onChange){
+// r24: an extra-low notch some games (MotoX) prepend to their speed bar
+const SPEED_CHILL={k:"chill",label:"🐌 Chill",v:0.4};
+function speedBar(ref, onChange, list){
   const bar=el("div","speedbar");
-  SPEEDS.forEach(s=>{ const b=el("button", (ref.k===s.k||ref.v===s.v)?"on":"", s.label);
+  (list||SPEEDS).forEach(s=>{ const b=el("button", (ref.k===s.k||ref.v===s.v)?"on":"", s.label);
     b.onclick=()=>{ ref.v=s.v*(ref.mul||1); ref.k=s.k; [...bar.children].forEach(c=>c.classList.remove("on")); b.classList.add("on"); onChange&&onChange(ref.v); };
     bar.appendChild(b); });
   return bar;
@@ -4521,13 +4547,15 @@ function renderHub(){
   // daily quests widget — visible unfinished goals pull the player back in
   const d=dailyQuests();
   const qw=el("div","pcard"); qw.style.cssText="margin:10px 0 4px;padding:12px 16px";
-  qw.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><b>📋 Today's quests</b><span class="muted" style="font-size:12px">50 pts each · all 3 = +100 bonus</span></div>
+  qw.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><b>📋 Today's quests</b><span class="muted" style="font-size:12px">tuned to your level · all 3 = +100 bonus</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
-    ${d.q.map(id=>{ const q=QUEST_POOL.find(x=>x.id===id); const p=Math.min(q.target,d.prog[id]||0); const done=d.done.includes(id);
+    ${d.q.map(id=>{ const q=QUEST_POOL.find(x=>x.id===id)||{icon:'⭐',rew:50};
+      const m=(d.meta||{})[id]||{}; const tgt=m.target||1, nm=m.name||id;   // r24: adaptive target/name
+      const p=Math.min(tgt,d.prog[id]||0); const done=d.done.includes(id);
       return `<div style="background:var(--panel2);border-radius:10px;padding:9px 12px;${done?"opacity:.75":""}">
-        <div style="font-size:13px;font-weight:800">${done?"✅":q.icon} ${q.name}</div>
-        <div class="progress" style="margin-top:6px"><i style="width:${100*p/q.target}%;background:${done?"var(--good)":"var(--accent)"}"></i></div>
-        <div class="muted" style="font-size:11px;margin-top:3px">${done?"done! +50":p+" / "+q.target}</div></div>`; }).join("")}</div>`;
+        <div style="font-size:13px;font-weight:800">${done?"✅":q.icon} ${nm}</div>
+        <div class="progress" style="margin-top:6px"><i style="width:${100*p/tgt}%;background:${done?"var(--good)":"var(--accent)"}"></i></div>
+        <div class="muted" style="font-size:11px;margin-top:3px">${done?"done! +"+(q.rew||50):p+" / "+tgt}</div></div>`; }).join("")}</div>`;
   wrap.appendChild(qw);
   const ctr=el("div","controls");
   ctr.appendChild(el("label",null,"Studying"));
@@ -4574,6 +4602,9 @@ function renderHub(){
     fams.forEach(tpl=>{
       const fits=subjectFits(tpl, HUB.subject);
       const nfm=!!PROFILE.notForMe[tpl.id];
+      // r24: non-fitting cards used to have NO click handler at all — playtesters
+      // "couldn't enter" those games. They now launch with their best-fitting subject.
+      const altSubj = fits? HUB.subject : (tpl.subjects.find(s=>(SKILL_FIT[tpl.skill]||[]).includes(s)) || tpl.subjects[0]);
       const card=el("div","tcard "+(tpl.flagship?"flag":"stub")+(tpl.id===recId&&!nfm?" rec":"")+(fits?"":" dim")+(nfm?" notforme-card":""));
       const suits=tpl.subjects.map(x=>SUBJECTS[x].label).join(", ");
       card.innerHTML=`${tpl.id===recId&&!nfm?'<div class="recbadge">★ RECOMMENDED</div>':""}
@@ -4581,14 +4612,13 @@ function renderHub(){
         <h4>${tpl.name}</h4>
         <p>${tpl.desc}</p>
         ${nfm?`<div class="fitnote">You said this one isn't for you — <u>tap ↩ to bring it back</u></div>`:""}
-        ${fits?"":`<div class="fitnote">Best for ${suits} — not a fit for ${SUBJECTS[HUB.subject].label} here</div>`}
+        ${fits?"":`<div class="fitnote">Best for ${suits} — tap to play it in ${SUBJECTS[altSubj].label}</div>`}
         <div class="meta"><span class="tag" style="background:linear-gradient(180deg,#233a68,#14203f);color:#8fd0ff">🚩 ${PROFILE.rounds[tpl.id]||0}/${MAX_ROUNDS}</span><span class="tag" style="background:linear-gradient(180deg,#3a3068,#241c3f);color:#ffcf5c">⭐ Lv ${PROFILE.levels[tpl.id]||1}</span><span class="tag">${tpl.time}</span>${nfm?'<span class="tag">↩ bring back</span>':""}</div>`;
       if(nfm){
         card.onclick=()=>{ delete PROFILE.notForMe[tpl.id]; saveProfile(); renderHub(); };
-      } else if(fits){
-        card.onclick=()=>launch(tpl, HUB.subject);
       } else {
-        card.title="This subject doesn't fit this template's skill shape";
+        card.onclick=()=>launch(tpl, altSubj);
+        if(!fits) card.title="Opens with "+SUBJECTS[altSubj].label+" content — this subject doesn't fit this game's skill shape";
       }
       grid.appendChild(card);
     });
@@ -4721,7 +4751,7 @@ function endSession(customArtifactHTML){
     const row=$("#mystery-row"); row.innerHTML=`<div style="font-weight:900;font-size:17px;animation:pop .4s">${txt}</div><div class="muted" style="font-size:12px">total: ${PROFILE.points} pts</div>`;
   }; });
   // quest completions pop as toasts
-  (award.quests||[]).forEach((q,i)=>setTimeout(()=>{ achToast({icon:q.icon,name:q.name,reward:{name:"+50 pts",type:"",val:""}}); }, 700+i*600));
+  (award.quests||[]).forEach((q,i)=>setTimeout(()=>{ achToast({icon:q.icon,name:q.name,reward:{name:"+"+(q.rew||50)+" pts",type:"",val:""}}); }, 700+i*600));   // r24: proportional quest rewards
   award.newly.forEach((a,i)=>setTimeout(()=>achToast(a), 400+i*500));
   const nx=$("#sum-next"); if(nx) nx.onclick=()=>{ SND.tap();
     launch(tplById(sum.template), sum.subject, {round:doneRound+1, skipInstructions:true, seen:CURRENT_SEEN}); };
@@ -5286,14 +5316,16 @@ RENDERERS.lane=function(ctx){
   const pb=promptBanner(host);
   const tray=el("div"); tray.style.cssText="position:absolute;left:0;right:0;bottom:0;display:flex;gap:10px;justify-content:center;padding:14px;z-index:4;flex-wrap:wrap";
   host.appendChild(tray);
-  host.appendChild(el("div","hint","Pick the correct NEXT word, then tap the lane it should defend"));
+  // r24: clearer two-step hint copy
+  host.appendChild(el("div","hint","1) Tap the NEXT word below · 2) tap a lane to fire it"));
+  const TUT=(ctx.round||1)===1 && !(PROFILE.rounds&&PROFILE.rounds.lane);   // r24: first wave = guided tutorial
 
   let W,H,LANES=3, baseX;
   function resize(){ W=cv.width=host.clientWidth; H=cv.height=host.clientHeight; baseX=Math.max(70,W*0.11); }
   resize(); const ro=new ResizeObserver(resize); ro.observe(host);
   function laneY(i){ const top=H*0.16, bot=H-120; return top+(bot-top)*(i+0.5)/LANES; }
 
-  const bank=SEQ[subject]; const seen=ctx.seen;
+  const bank=SEQ[subject]||SEQ.english; const seen=ctx.seen;   // r24: never launch-crash on an unbanked subject
   let S={wave:1, score:0, lives:3, order:[], idx:0, distract:[], zombies:[], defenders:[], bolts:[], particles:[],
     armed:null, spawnT:0, done:false, waveCleared:false, count:0};
 
@@ -5306,7 +5338,7 @@ RENDERERS.lane=function(ctx){
   }
   function updateGoal(){
     const slots=S.order.map((w,i)=> i<S.idx?`<span style="color:var(--good)">${w}</span>`:`<span style="color:#4a5088">▢</span>`).join(" ");
-    pb.set("Build: "+S.item.label, `<span style="font-size:22px">${slots}</span>`);
+    pb.set("Build in order: "+S.item.label, `<span style="font-size:22px">${slots}</span>`);   // r24: clearer banner copy
   }
   function dealHand(){
     // hand = the correct next token + 2 distractors (never repeats verbatim mid-hand)
@@ -5316,8 +5348,11 @@ RENDERERS.lane=function(ctx){
     tray.innerHTML="";
     hand.forEach(w=>{
       const b=el("button","btn ghost", w); b.style.fontSize="15px";
+      // r24: guided first wave — the correct tile pulses so kids learn the loop
+      if(TUT && S.wave===1 && w===next) b.style.animation="tutpulse 1.1s infinite";
       b.onclick=()=>{ S.armed={w, correct:w===next, btn:b};
-        [...tray.children].forEach(c=>c.style.outline=""); b.style.outline="3px solid "+theme.accent; };
+        [...tray.children].forEach(c=>{c.style.outline="";});
+        b.style.outline="3px solid "+theme.accent; };
       tray.appendChild(b);
     });
   }
@@ -5381,10 +5416,11 @@ RENDERERS.lane=function(ctx){
     const spd=ctx.speed.v;
     if(!S.waveCleared){
       S.spawnT-=dt*spd;
-      const rate=1.7-Math.min(1.1,S.wave*0.12);
+      // r24: ~25% brisker base pacing ("confusing and too slow") — tutorial wave stays gentle
+      const rate=(TUT&&S.wave===1)?1.7:1.35-Math.min(0.85,S.wave*0.1);
       if(S.spawnT<=0){ S.spawnT=rate; spawnZombie(); }
     }
-    const zspeed=(22+S.wave*5)*spd;
+    const zspeed=((TUT&&S.wave===1)?(20+S.wave*5):(28+S.wave*6))*spd;
     S.zombies.forEach(z=>{ z.x-=zspeed*dt; z.wob+=dt*6; });
     // zombie reaches base
     S.zombies.filter(z=>z.x<=baseX).forEach(z=>{ S.lives--; $("#l-lives").textContent=S.lives; addP(baseX,z.y,"#ff6b81",14); flash(host,"💥 breach!",true); });
@@ -5424,14 +5460,36 @@ RENDERERS.lane=function(ctx){
       g.font="700 12px Nunito"; g.fillStyle="#ffd7dd";
       const tw=g.measureText(z.w).width; g.fillStyle="rgba(60,10,20,.85)"; roundRect(g,z.x-tw/2-6,z.y-26,tw+12,18,6); g.fill();
       g.fillStyle="#ffd7dd"; g.fillText(z.w, z.x, z.y-17); });
+    // r24: guided first wave — once a tile is armed, a pulsing arrow points at the
+    // lane under threat so kids connect "pick tile → tap lane"
+    if(TUT && S.wave===1 && S.armed){
+      const front=S.zombies.slice().sort((a,b)=>a.x-b.x)[0];
+      const ly=laneY(front?front.lane:1), pulse=0.6+0.4*Math.sin(performance.now()/160);
+      g.save(); g.globalAlpha=pulse; g.fillStyle="#ffcf5c";
+      const ax=baseX+90;
+      g.beginPath(); g.moveTo(ax+34,ly); g.lineTo(ax,ly-16); g.lineTo(ax,ly+16); g.closePath(); g.fill();
+      g.font="900 14px Nunito"; g.textAlign="left"; g.textBaseline="middle";
+      const lbl=(typeof LANG!=="undefined"&&LANG==="he")?"הקישו על הנתיב הזה!":"tap this lane!";
+      g.fillText(lbl,ax+42,ly); g.restore();
+    }
+    // r24: keyboard lane cursor
+    if(S.selLane!=null){ const ly=laneY(S.selLane); g.save(); g.strokeStyle=hexA(theme.accent,0.8); g.lineWidth=3;
+      g.setLineDash([8,6]); const h=(H*0.84-H*0.16)/LANES; g.strokeRect(4,ly-h/2+4,W-8,h-8); g.setLineDash([]); g.restore(); }
     // particles
     S.particles.forEach(p=>{ g.globalAlpha=Math.max(0,p.life); g.fillStyle=p.c; g.beginPath(); g.arc(p.x,p.y,4,0,7); g.fill(); }); g.globalAlpha=1;
   }
   function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
   function finish(){ if(S.done)return; S.done=true; running=false; setTimeout(()=>endSession(
     `<p class="muted">You held ${S.count} wave(s) by building sentences in order under fire. Order was the weapon — never a paused grammar quiz.</p>`),500); }
+  // r24: full keyboard play — 1/2/3 pick a tile, ↑/↓ choose the lane, Enter/Space deploy
+  const onKeyL=(e)=>{ if(paused)return;
+    if(/^[1-9]$/.test(e.key)){ const b=tray.children[+e.key-1]; if(b){ b.click(); } }
+    if(e.key==="ArrowUp"||e.key==="ArrowDown"){ e.preventDefault();
+      S.selLane=Math.max(0,Math.min(LANES-1,(S.selLane==null?1:S.selLane)+(e.key==="ArrowDown"?1:-1))); }
+    if(e.key==="Enter"||e.key===" "){ e.preventDefault(); if(S.armed) deploy(S.selLane==null?1:S.selLane); } };
+  window.addEventListener("keydown",onKeyL);
   raf=requestAnimationFrame(loop);
-  return { stop(){ running=false; cancelAnimationFrame(raf); ro.disconnect(); } };
+  return { stop(){ running=false; cancelAnimationFrame(raf); ro.disconnect(); window.removeEventListener("keydown",onKeyL); } };
 };
 
 /* ================================================================
@@ -5765,6 +5823,15 @@ RENDERERS.growth=function(ctx){
   host.appendChild(hud); hud.querySelector("#gr-speed").appendChild(speedBar(ctx.speed));
   const pb=promptBanner(host);
   const hint=el("div","hint","Steer to eat the MATCH · hold to BOOST · cut a rival off to K.O. it!"); host.appendChild(hint); setTimeout(()=>hint.remove(),4600);
+  // r24: first-round onboarding — 3-step animated hint sequence + a slowed-down
+  // first item (rivals crawl, arrow points at the matching orb) so kids get it
+  const TUT=(ctx.round||1)===1 && !(PROFILE.rounds&&PROFILE.rounds.growth);
+  if(TUT){
+    const steps=["1️⃣ Read the target word at the TOP","2️⃣ Eat the orb whose word MATCHES it (see the arrow!)","3️⃣ Wrong orbs shrink you — steer with your finger or mouse"];
+    const tt=el("div","hint"); tt.style.cssText+=";bottom:auto;top:128px;font-size:15px;color:#fff;border:1px solid var(--warn);z-index:5";
+    host.appendChild(tt); let ts=0;
+    (function adv(){ if(ts<steps.length){ tt.textContent=steps[ts++]; tt.style.animation="none"; void tt.offsetWidth; tt.style.animation="fade .5s"; setTimeout(adv,2600); } else tt.remove(); })();
+  }
   let W,H; function resize(){W=cv.width=host.clientWidth;H=cv.height=host.clientHeight;} resize(); const ro=new ResizeObserver(resize); ro.observe(host);
   const bank=fastBank(subject); const seen=ctx.seen;
   const ORBPAL=["#6ea8ff","#b98bff","#ffcf5c","#37d0e0","#ff6b81","#57d98a","#ff9f5c"];
@@ -5787,7 +5854,7 @@ RENDERERS.growth=function(ctx){
   function loop(now){ if(!running)return; const dt=Math.min(.05,(now-last)/1000); last=now; if(!paused)update(dt); draw(); raf=requestAnimationFrame(loop); }
   function update(dt){ const spd=ctx.speed.v; const head=path[0];
     const a=Math.atan2(aim.y-head.y,aim.x-head.x);
-    const boosting=S.boosting&&len>5; const v=(boosting?250:150)*spd;
+    const boosting=S.boosting&&len>5; const v=(boosting?250:150)*spd*((TUT&&S.count===0)?0.75:1);   // r24: gentler first item
     if(boosting){ S.drain+=dt; if(S.drain>0.35){ S.drain=0; len=Math.max(5,len-1); $("#gr-len").textContent=len; } }
     const nx=head.x+Math.cos(a)*v*dt, ny=head.y+Math.sin(a)*v*dt;
     path.unshift({x:Math.max(20,Math.min(W-20,nx)),y:Math.max(90,Math.min(H-20,ny))});
@@ -5808,8 +5875,9 @@ RENDERERS.growth=function(ctx){
         paused=true; pauseExplain(host,{emoji:"🔴",title:"Wrong orb — here's why",why:fastWhy(subject,S.item,o.w),actionLabel:"Keep growing ▶",onResume:()=>{paused=false; spawnOrb(o.w,false);}});
         return;
       } } }
-    // rivals
-    S.rivals.forEach(r=>{ if(Math.random()<0.02) r.a+=(Math.random()-.5); r.x+=Math.cos(r.a)*70*spd*dt; r.y+=Math.sin(r.a)*70*spd*dt;
+    // rivals (r24: crawl during the tutorial's slowed first item)
+    const rv=(TUT&&S.count===0)?24:70;
+    S.rivals.forEach(r=>{ if(Math.random()<0.02) r.a+=(Math.random()-.5); r.x+=Math.cos(r.a)*rv*spd*dt; r.y+=Math.sin(r.a)*rv*spd*dt;
       if(r.x<30||r.x>W-30)r.a=Math.PI-r.a; if(r.y<100||r.y>H-30)r.a=-r.a;
       r.x=Math.max(30,Math.min(W-30,r.x)); r.y=Math.max(100,Math.min(H-30,r.y));
       r.tail.unshift({x:r.x,y:r.y}); if(r.tail.length>20)r.tail.pop();
@@ -5835,6 +5903,14 @@ RENDERERS.growth=function(ctx){
       g.font="800 13px Nunito"; g.textAlign="center"; g.textBaseline="middle"; const tw=g.measureText(o.w).width;
       g.fillStyle="rgba(10,12,30,.82)"; g.fillRect(o.x-tw/2-6,o.y-30,tw+12,19);
       g.fillStyle="#fff"; g.fillText(o.w,o.x,o.y-20); });
+    // r24: tutorial arrow bounces over the matching orb until the first correct eat
+    if(TUT && S.count===0){ const o=S.orbs.find(x=>x.correct);
+      if(o){ const bob=Math.sin(performance.now()/180)*7;
+        g.save(); g.fillStyle="#ffd75c"; g.strokeStyle="rgba(10,12,30,.7)"; g.lineWidth=3;
+        g.beginPath(); g.moveTo(o.x,o.y-44+bob); g.lineTo(o.x-12,o.y-64+bob); g.lineTo(o.x+12,o.y-64+bob); g.closePath(); g.stroke(); g.fill();
+        g.font="900 14px Nunito"; g.textAlign="center"; g.textBaseline="middle";
+        const lbl=(typeof LANG!=="undefined"&&LANG==="he")?"תאכלו את זה!":"eat this one!";
+        g.fillText(lbl,o.x,o.y-76+bob); g.restore(); } }
     // rivals
     S.rivals.forEach(r=>{ g.fillStyle=hexA("#b98bff",0.5); r.tail.forEach((t,i)=>{g.beginPath();g.arc(t.x,t.y,10-i*0.3,0,7);g.fill();});
       g.font="24px serif";g.textAlign="center";g.textBaseline="middle";g.fillText(theme.foe,r.x,r.y); });
@@ -5854,9 +5930,20 @@ RENDERERS.growth=function(ctx){
   host.addEventListener("pointermove",onMove); host.addEventListener("touchmove",onMove,{passive:true});
   host.addEventListener("pointerdown",onDown); host.addEventListener("pointercancel",onUp);
   window.addEventListener("pointerup",onUp);
+  // r24: full keyboard play — arrows/WASD steer, hold Space to boost
+  const keys={};
+  const kAim=()=>{ const dx=(keys.ArrowRight||keys.d?1:0)-(keys.ArrowLeft||keys.a?1:0),
+    dy=(keys.ArrowDown||keys.s?1:0)-(keys.ArrowUp||keys.w?1:0);
+    if(dx||dy){ const h=path[0]; aim.x=h.x+dx*180; aim.y=h.y+dy*180; } };
+  const onKeyD=(e)=>{ const k=e.key.length===1?e.key.toLowerCase():e.key;
+    if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","w","a","s","d"," "].includes(k)) e.preventDefault();
+    if(k===" "){ S.boosting=true; return; } keys[k]=true; kAim(); };
+  const onKeyU=(e)=>{ const k=e.key.length===1?e.key.toLowerCase():e.key;
+    if(k===" "){ S.boosting=false; return; } keys[k]=false; kAim(); };
+  window.addEventListener("keydown",onKeyD); window.addEventListener("keyup",onKeyU);
   function finish(){ if(S.done)return; S.done=true; running=false; setTimeout(()=>endSession(`<p class="muted">You grew to length ${len}, ate the right meanings, and knocked out ${S.elim} rival${S.elim===1?"":"s"}. Hold to boost, cut them off to K.O. them!</p>`),300); }
   newItem(); raf=requestAnimationFrame(loop);
-  return {stop(){running=false;cancelAnimationFrame(raf);ro.disconnect();host.removeEventListener("pointermove",onMove);host.removeEventListener("touchmove",onMove);host.removeEventListener("pointerdown",onDown);host.removeEventListener("pointercancel",onUp);window.removeEventListener("pointerup",onUp);}};
+  return {stop(){running=false;cancelAnimationFrame(raf);ro.disconnect();host.removeEventListener("pointermove",onMove);host.removeEventListener("touchmove",onMove);host.removeEventListener("pointerdown",onDown);host.removeEventListener("pointercancel",onUp);window.removeEventListener("pointerup",onUp);window.removeEventListener("keydown",onKeyD);window.removeEventListener("keyup",onKeyU);}};
 };
 
 /* ================================================================
@@ -5924,9 +6011,18 @@ RENDERERS.shooter=function(ctx){
   }
   const onMove=(e)=>{ const r=cv.getBoundingClientRect(); S.aim.x=(e.touches?e.touches[0].clientX:e.clientX)-r.left; S.aim.y=(e.touches?e.touches[0].clientY:e.clientY)-r.top; };
   cv.addEventListener("pointermove",onMove); cv.addEventListener("pointerdown",(e)=>{onMove(e);fire();});
+  // r24: full keyboard play — arrows/WASD move the crosshair, Space/Enter fires
+  const onKeyS=(e)=>{ if(paused)return; const st=44;
+    const k=e.key.length===1?e.key.toLowerCase():e.key;
+    if(k==="ArrowLeft"||k==="a"){ e.preventDefault(); S.aim.x=Math.max(10,S.aim.x-st); }
+    if(k==="ArrowRight"||k==="d"){ e.preventDefault(); S.aim.x=Math.min(W-10,S.aim.x+st); }
+    if(k==="ArrowUp"||k==="w"){ e.preventDefault(); S.aim.y=Math.max(120,S.aim.y-st); }
+    if(k==="ArrowDown"||k==="s"){ e.preventDefault(); S.aim.y=Math.min(H-10,S.aim.y+st); }
+    if(k===" "||k==="Enter"){ e.preventDefault(); fire(); } };
+  window.addEventListener("keydown",onKeyS);
   function finish(){ if(S.done)return; S.done=true; running=false; setTimeout(()=>endSession(`<p class="muted">Shooting gallery cleared — ${S.count} correct hits. Every miss paused to show the right answer.</p>`),300); }
   newItem(); raf=requestAnimationFrame(loop);
-  return {stop(){running=false;cancelAnimationFrame(raf);ro.disconnect();cv.removeEventListener("pointermove",onMove);}};
+  return {stop(){running=false;cancelAnimationFrame(raf);ro.disconnect();cv.removeEventListener("pointermove",onMove);window.removeEventListener("keydown",onKeyS);}};
 };
 
 /* ================================================================
@@ -5946,7 +6042,8 @@ RENDERERS.jetpack=function(ctx){
   let W,H; function resize(){W=cv.width=host.clientWidth;H=cv.height=host.clientHeight;} resize(); const ro=new ResizeObserver(resize); ro.observe(host);
   const bank=fastBank(subject); const seen=ctx.seen;
   let S={y:0,band:1,thrust:false,score:0,combo:0,lives:3,count:0,item:null,gate:null,parts:[],dist:0,done:false,
-    coins:[],obs:[],coinT:0.5,obsT:2.4,coinsGot:0,inv:0};
+    coins:[],obs:[],coinT:0.5,obsT:2.4,coinsGot:0,inv:0,
+    fromY:200,moveT:9,moveDur:0.34};   // r24: timed band-to-band flight (no teleport)
   S.y=200;
   function bandY(i){ return H*0.18 + (H*0.72)*(i+0.5)/3; }
   function newGate(){ const it=pickNoRepeat(bank[diff.band()],seen); S.item=it;
@@ -5958,12 +6055,24 @@ RENDERERS.jetpack=function(ctx){
   let raf,last=performance.now(),running=true,paused=false;
   function loop(now){ if(!running)return; const dt=Math.min(.05,(now-last)/1000); last=now; if(!paused)update(dt); draw(); raf=requestAnimationFrame(loop); }
   function update(dt){ const spd=ctx.speed.v;
-    const ty=bandY(S.band); S.thrust = ty < S.y-2; S.y += (ty-S.y)*Math.min(1,dt*11);   // ease to the chosen band
+    // r24: GRADUAL band flight — a ~340ms eased glide instead of a near-instant snap,
+    // so the jetpack visibly flies between bands (settle-lerp covers window resizes)
+    const ty=bandY(S.band);
+    if(S.moveT<S.moveDur){ S.moveT+=dt; const k=Math.min(1,S.moveT/S.moveDur), e=k*k*(3-2*k);
+      S.y=S.fromY+(ty-S.fromY)*e; }
+    else S.y += (ty-S.y)*Math.min(1,dt*6);
+    S.thrust = ty < S.y-2;
     S.dist+=dt*160*spd;
     if(S.inv>0)S.inv-=dt;
     const _px=W*0.2;
     S.coinT-=dt*spd;
-    if(S.coinT<=0){ S.coinT=0.9+Math.random()*0.6; const cy=rint(H*0.2,H*0.8), n=rint(3,6); for(let i=0;i<n;i++) S.coins.push({x:W+i*34,y:cy+Math.sin(i*0.7)*40}); }
+    if(S.coinT<=0){ S.coinT=0.9+Math.random()*0.6;
+      // r24: coins spawn ON a band center (reachable flight path), gentle wave stays
+      // inside the 26px pickup window, and never overlapping a zapper (same scroll speed)
+      const cb=rint(0,2), cy=bandY(cb), n=rint(3,6);
+      for(let i=0;i<n;i++){ const cx=W+i*34, cyy=cy+Math.sin(i*0.9)*10;
+        if(S.obs.some(o=>Math.abs(o.x-cx)<46 && cyy>o.y-o.h/2-24 && cyy<o.y+o.h/2+24)) continue;
+        S.coins.push({x:cx,y:cyy}); } }
     S.obsT-=dt*spd;
     if(S.obsT<=0){ S.obsT=1.8+Math.random()*1.6; S.obs.push({x:W+40,y:rint(H*0.2,H*0.72),h:rint(70,130)}); }
     const ov=190*spd; S.coins.forEach(c=>c.x-=ov*dt); S.obs.forEach(o=>o.x-=ov*dt);
@@ -6008,7 +6117,7 @@ RENDERERS.jetpack=function(ctx){
     S.parts.forEach(p=>{g.globalAlpha=Math.max(0,p.life);g.fillStyle=p.c;g.beginPath();g.arc(p.x,p.y,4,0,7);g.fill();}); g.globalAlpha=1;
   }
   function rrp(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
-  const setBand=(b)=>{ if(paused)return; b=Math.max(0,Math.min(2,b)); if(b!==S.band){ S.band=b; SND.tap(theme); } };
+  const setBand=(b)=>{ if(paused)return; b=Math.max(0,Math.min(2,b)); if(b!==S.band){ S.band=b; S.fromY=S.y; S.moveT=0; SND.tap(theme); } };   // r24: kick off the glide
   const onKey=(e)=>{ if(e.key==="ArrowUp"||e.key==="w"||e.key==="W"){ e.preventDefault(); setBand(S.band-1); } if(e.key==="ArrowDown"||e.key==="s"||e.key==="S"){ e.preventDefault(); setBand(S.band+1); } };
   window.addEventListener("keydown",onKey);
   cv.addEventListener("pointerdown",(e)=>{ if(paused)return; const r=cv.getBoundingClientRect(); const y=(e.clientY||0)-r.top; let best=0,bd=1e9; for(let i=0;i<3;i++){const d=Math.abs(y-bandY(i)); if(d<bd){bd=d;best=i;}} setBand(best); });
@@ -6209,7 +6318,7 @@ RENDERERS.hoops=function(ctx){
   function resetBall(){ S.ball={x:W/2,y:H-72,vx:0,vy:0,flying:false}; }
   function newItem(){ const it=pickNoRepeat(bank[diff.band()],seen); S.item=it; let opts=shuffle([it.correct,...it.decoys]).slice(0,3); if(!opts.includes(it.correct))opts[0]=it.correct;
     const n=opts.length; const hy=Math.min(Math.max(H*0.36,150), Math.max(120,H-115));
-    S.hoops=opts.map((w,i)=>({w,correct:w===it.correct,x:W*(i+0.5)/n,y:hy,r:50}));
+    S.hoops=opts.map((w,i)=>({w,correct:w===it.correct,x:W*(i+0.5)/n,y:hy,r:62}));   // r24: rims ~25% bigger — easier buckets
     S.clock=14; S.resolved=false; resetBall(); pb.set(bank.prompt.replace(/^(Grab|Drive into|Steer into)/,"Sink"), `<b>${it.target}</b>`); }
   function addP(x,y,c,n){for(let i=0;i<n;i++)S.parts.push({x,y,vx:(Math.random()-.5)*260,vy:(Math.random()-.5)*260,life:1,c});}
   let raf,last=performance.now(),running=true,paused=false;
@@ -6219,8 +6328,8 @@ RENDERERS.hoops=function(ctx){
     const b=S.ball; if(b&&b.flying){ const py=b.y; b.vy+=820*dt; b.x+=b.vx*dt; b.y+=b.vy*dt;
       // must actually drop THROUGH the opening (not just clip the rim)
       for(const hp of S.hoops){ if(b.vy>0 && py<=hp.y && b.y>=hp.y){ const dx=Math.abs(b.x-hp.x);
-        if(dx<hp.r*0.42){ score(hp); return; }                     // swish — through the net
-        else if(dx<hp.r*0.72){ b.vx=-b.vx*0.45; b.vy*=0.55; addP(b.x,hp.y,"#ff7043",6); } // rim bounce — no score, try again
+        if(dx<hp.r*0.5){ score(hp); return; }                      // r24: wider swish window — more forgiving makes
+        else if(dx<hp.r*0.78){ b.vx=-b.vx*0.45; b.vy*=0.55; addP(b.x,hp.y,"#ff7043",6); } // rim bounce — no score, try again
       } }
       if(b.y>H+40||b.x<-60||b.x>W+60){ if(!S.resolved){ resetBall(); } }
     }
@@ -6259,6 +6368,9 @@ RENDERERS.hoops=function(ctx){
       g.fillStyle="#fff"; g.fillText(hp.w,hp.x,hp.y-off+15);
       // little pointer from chip to rim
       g.strokeStyle=hexA(theme.accent,0.5); g.setLineDash([3,4]); g.beginPath(); g.moveTo(hp.x,hp.y-off+30); g.lineTo(hp.x,hp.y-6); g.stroke(); g.setLineDash([]); });
+    // r24: keyboard aim marker (appears once ←/→ is used)
+    if(S.kUsed && S.hoops[S.kSel]){ const hp=S.hoops[S.kSel], bob=Math.sin(performance.now()/180)*4;
+      g.fillStyle="#ffcf5c"; g.beginPath(); g.moveTo(hp.x,hp.y+26+bob); g.lineTo(hp.x-10,hp.y+42+bob); g.lineTo(hp.x+10,hp.y+42+bob); g.closePath(); g.fill(); }
     // aim guide + trajectory preview (so shots are landable)
     if(S.drag&&S.ball){ const vx=Math.max(-950,Math.min(950,(S.drag.x-S.ball.x)*4.2)), vy=Math.max(-1600,Math.min(-140,(S.drag.y-S.ball.y)*4.2));
       let px=S.ball.x,py=S.ball.y,pvy=vy; g.fillStyle=hexA(theme.accent,0.55);
@@ -6272,9 +6384,21 @@ RENDERERS.hoops=function(ctx){
   cv.addEventListener("pointerdown",(e)=>{ if(paused||!S.ball||S.ball.flying)return; const p=pos(e); if(Math.hypot(p.x-S.ball.x,p.y-S.ball.y)<60) S.drag=p; });
   cv.addEventListener("pointermove",(e)=>{ if(S.drag) S.drag=pos(e); });
   cv.addEventListener("pointerup",(e)=>{ if(!S.drag||!S.ball)return; const p=pos(e); const vx=(p.x-S.ball.x)*4.2, vy=(p.y-S.ball.y)*4.2; S.ball.vx=Math.max(-950,Math.min(950,vx)); S.ball.vy=Math.max(-1600,Math.min(-140,vy)); S.ball.flying=true; S.drag=null; SND.tap(theme); });
+  // r24: full keyboard play — ←/→ pick a hoop, Enter/Space shoot at it (slight arc
+  // jitter keeps rim-outs possible, so it's an aim assist, not an auto-win)
+  S.kSel=1;
+  const onKeyH=(e)=>{ if(paused||!S.ball||S.ball.flying)return;
+    if(e.key==="ArrowLeft"||e.key==="ArrowRight"){ e.preventDefault(); S.kUsed=true;
+      S.kSel=Math.max(0,Math.min(S.hoops.length-1,S.kSel+(e.key==="ArrowRight"?1:-1))); S.drag=null; }
+    if(e.key==="Enter"||e.key===" "){ e.preventDefault(); const hp=S.hoops[S.kSel]; if(!hp)return;
+      const T=0.9, jit=1+(Math.random()-0.5)*0.12;
+      const vx=((hp.x-S.ball.x)/T)*jit, vy=(hp.y-S.ball.y-0.5*820*T*T)/T;
+      S.ball.vx=Math.max(-950,Math.min(950,vx)); S.ball.vy=Math.max(-1600,Math.min(-140,vy));
+      S.ball.flying=true; SND.tap(theme); } };
+  window.addEventListener("keydown",onKeyH);
   function finish(){ if(S.done)return; S.done=true; running=false; setTimeout(()=>endSession(`<p class="muted">You sank ${S.count} synonym buckets with real arc physics. Wrong hoops paused to explain the meaning.</p>`),400); }
   newItem(); raf=requestAnimationFrame(loop);
-  return {stop(){running=false;cancelAnimationFrame(raf);ro.disconnect();}};
+  return {stop(){running=false;cancelAnimationFrame(raf);ro.disconnect();window.removeEventListener("keydown",onKeyH);}};
 };
 
 /* ================================================================
@@ -6287,7 +6411,7 @@ RENDERERS.motox=function(ctx){
   const cv=el("canvas"); host.appendChild(cv); const g=cv.getContext("2d");
   const hud=el("div","hud");
   hud.innerHTML=`<div class="spacer"></div><div id="mx-speed"></div><div class="box">Score <b id="mx-score">0</b></div><div class="box">🔥 <b id="mx-combo">0</b></div><div class="box">❤ <span id="mx-lives">3</span></div>`;
-  host.appendChild(hud); hud.querySelector("#mx-speed").appendChild(speedBar(ctx.speed));
+  host.appendChild(hud); hud.querySelector("#mx-speed").appendChild(speedBar(ctx.speed,null,[SPEED_CHILL,...SPEEDS]));   // r24: bar can go lower here
   const pb=promptBanner(host);
   const hint=el("div","hint","↑ / ↓ or tap a ramp — ride the correct one for a boost"); host.appendChild(hint); setTimeout(()=>hint.remove(),3800);
   let W,H; function resize(){W=cv.width=host.clientWidth;H=cv.height=host.clientHeight;} resize(); const ro=new ResizeObserver(resize); ro.observe(host);
@@ -6299,8 +6423,8 @@ RENDERERS.motox=function(ctx){
   function addP(x,y,c,n){for(let i=0;i<n;i++)S.parts.push({x,y,vx:(Math.random()-.5)*240,vy:-Math.random()*200-40,life:1,c});}
   let raf,last=performance.now(),running=true,paused=false;
   function loop(now){ if(!running)return; const dt=Math.min(.05,(now-last)/1000); last=now; if(!paused)update(dt); draw(); raf=requestAnimationFrame(loop); }
-  function update(dt){ const spd=ctx.speed.v; S.dist+=dt*220*spd; if(S.jump>0)S.jump-=dt; if(S.wob>0)S.wob-=dt;
-    if(!S.resolved){ S.gz+=dt*0.5*spd;
+  function update(dt){ const spd=ctx.speed.v; S.dist+=dt*176*spd; if(S.jump>0)S.jump-=dt; if(S.wob>0)S.wob-=dt;
+    if(!S.resolved){ S.gz+=dt*0.4*spd;   // r24: ~20% slower base ramp approach ("too fast")
       if(S.gz>=1){ S.resolved=true; const chosen=S.ramps.find(r=>r.lane===S.sel); const ok=chosen&&chosen.correct; S.count++;
         LOG.record({prompt:S.item.target,correct:S.item.correct,chose:chosen?chosen.w:"?",firstTry:!!ok,attempts:1,rtMs:0,tier:diff.tier});
         const lastq=S.lives<=0||S.count>=ctx.target;
@@ -7034,6 +7158,7 @@ function showConsentGate(onDone){
 
 /* Onboarding stage — hosts the full questionnaire in an isolated iframe. */
 function startOnboarding(){
+  wireProfileMessages();   // r24: wire BEFORE the placeholder early-return so profile messages always land
   const src=document.getElementById("q-src"); const html=(src?src.textContent:"").replace(/<\\\/script>/g,"<\/script>").trim();
   if(!html || html.indexOf("QUESTIONNAIRE_PLACEHOLDER")>=0){ renderBoot(); show("scr-boot"); return; }
   const s=$("#scr-onboard"); s.innerHTML="";
@@ -7053,20 +7178,42 @@ function startOnboarding(){
   s.appendChild(frame); show("scr-onboard");
   // saved answers flow back INTO the questionnaire so they're visible and tweakable
   frame.addEventListener("load",()=>{ try{ const raw=loadRawProfile(); if(raw&&frame.contentWindow) frame.contentWindow.postMessage({__lp:'prefill', profile:raw}, "*"); }catch(e){} });
-  if(!window.__lpMsgWired){ window.__lpMsgWired=true;
-    window.addEventListener("message", async (e)=>{
-      const d=e.data||{};
-      if(d.__lp==='profile'&&d.profile){ SND.init(); saveRawProfile(d.profile); applyProfile(d.profile); showCityPlan(d.profile); return; }
-      if(d.__lpq && d.reqId){ // questionnaire bridge: class create / lookup
-        let out=null;
-        try{
-          if(d.__lpq==='classCreate') out=await CONTENT.classCreate(d.payload||{});
-          else if(d.__lpq==='classGet') out=await CONTENT.classGet((d.payload||{}).code);
-        }catch(err){ out={ok:false, reason:String(err&&err.message||err)}; }
-        try{ e.source && e.source.postMessage(Object.assign({__lpqr:d.reqId}, out||{ok:false}), "*"); }catch(err){}
-      }
-    });
-  }
+}
+function wireProfileMessages(){   // r24: extracted so it runs even in placeholder builds
+  if(window.__lpMsgWired) return; window.__lpMsgWired=true;
+  window.addEventListener("message", async (e)=>{
+    const d=e.data||{};
+    if(d.__lp==='profile'&&d.profile){ SND.init(); saveRawProfile(d.profile); applyProfile(d.profile); showCityPlan(d.profile); offerProfileDownload(d.profile); return; }   // r24: parents keep a JSON copy
+    if(d.__lpq && d.reqId){ // questionnaire bridge: class create / lookup
+      let out=null;
+      try{
+        if(d.__lpq==='classCreate') out=await CONTENT.classCreate(d.payload||{});
+        else if(d.__lpq==='classGet') out=await CONTENT.classGet((d.payload||{}).code);
+      }catch(err){ out={ok:false, reason:String(err&&err.message||err)}; }
+      try{ e.source && e.source.postMessage(Object.assign({__lpqr:d.reqId}, out||{ok:false}), "*"); }catch(err){}
+    }
+  });
+}
+
+/* r24: after the questionnaire saves, parents get a copy of the family-profile
+   JSON again — one automatic download attempt plus a non-blocking toast with a
+   button (the button covers browsers that block the non-gesture download). */
+function offerProfileDownload(profile){
+  try{
+    const blob=new Blob([JSON.stringify(profile,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const name="family-profile-"+new Date().toISOString().slice(0,10)+".json";
+    const auto=document.createElement("a"); auto.href=url; auto.download=name;
+    document.body.appendChild(auto); try{ auto.click(); }catch(e){} auto.remove();
+    const t=el("div","ach-toast"); t.style.zIndex="700";
+    t.innerHTML=`<div class="ai">💾</div><div style="text-align:left"><div>Profile saved on this device</div>
+      <b>Keep a family copy:</b> <button class="btn small" id="pdl-btn" style="margin-left:8px">⬇ Download profile file</button></div>`;
+    document.body.appendChild(t);
+    t.querySelector("#pdl-btn").onclick=()=>{ const a=document.createElement("a"); a.href=url; a.download=name;
+      document.body.appendChild(a); a.click(); a.remove(); };
+    setTimeout(()=>{ t.style.transition="opacity .5s"; t.style.opacity="0";
+      setTimeout(()=>{ t.remove(); URL.revokeObjectURL(url); },600); },14000);
+  }catch(e){}
 }
 
 /* raw questionnaire answers persist so they can be reviewed & tweaked any time */
@@ -7153,7 +7300,14 @@ window.__AIBC_HE={
 "Keep growing ▶":"ממשיכים לגדול ▶","Reload ▶":"עוד ניסיון ▶","See results ▶":"לתוצאות ▶","OK":"אישור",
 "Never mind":"לא משנה","Try again":"עוד ניסיון","Play again":"שחק שוב","Let's start":"מתחילים!",
 "Goal:":"מטרה:","Score":"ניקוד","Len":"אורך","Wave":"גל","Profile":"פרופיל","Progress":"התקדמות",
-"🐢 Slow":"🐢 לאט","🚶 Normal":"🚶 רגיל","⚡ Fast":"⚡ מהיר",
+"🐢 Slow":"🐢 לאט","🚶 Normal":"🚶 רגיל","⚡ Fast":"⚡ מהיר","🐌 Chill":"🐌 רגוע",
+/* r24: new tutorial / hint / toast strings */
+"1) Tap the NEXT word below · 2) tap a lane to fire it":"‏1) הקישו על המילה הבאה למטה · 2) הקישו על נתיב כדי לירות",
+"1️⃣ Read the target word at the TOP":"1️⃣ קראו את מילת המטרה למעלה",
+"2️⃣ Eat the orb whose word MATCHES it (see the arrow!)":"2️⃣ אכלו את הכדור שהמילה שלו מתאימה (עקבו אחרי החץ!)",
+"3️⃣ Wrong orbs shrink you — steer with your finger or mouse":"3️⃣ כדורים שגויים מקטינים — נווטו עם האצבע או העכבר",
+"Profile saved on this device":"הפרופיל נשמר במכשיר הזה",
+"Keep a family copy:":"שמרו עותק משפחתי:","⬇ Download profile file":"⬇ הורדת קובץ הפרופיל",
 /* ---------- hub ---------- */
 "The Learning Platform":"פלטפורמת הלמידה","16 templates · shared engine":"16 משחקים · מנוע אחד",
 "Hey":"היי","— what do you want to play?":"— מה בא לך לשחק?",
@@ -7167,7 +7321,13 @@ window.__AIBC_HE={
 "collaborator":"משתפ/ת פעולה","investigator":"חוקר/ת","playable":"פתוח",
 
 "+ type any topic (e.g. addition)…":"+ כל נושא שתרצו (למשל חיבור)…",
-"📋 Today's quests":"📋 המשימות של היום","50 pts each · all 3 = +100 bonus":"‏50 נק׳ כל אחת · כל ה־3 = בונוס ‎+100",
+"📋 Today's quests":"📋 המשימות של היום",
+/* r24: adaptive quests — header + fixed quest names (dynamic ones live in the RX rules) */
+"tuned to your level · all 3 = +100 bonus":"מותאם לרמה שלך · כל ה־3 = בונוס ‎+100",
+"Finish a comprehension game":"לסיים משחק הבנה",
+"Finish a round with 0 misses":"לסיים סיבוב בלי אף טעות",
+"Master streak: reach 8 in a row":"רצף אלוף: 8 תשובות ברצף",
+"ALL quests done — +100 bonus!":"כל המשימות הושלמו — בונוס ‎+100!",
 "done! +50":"בוצע! ‎+50","★ RECOMMENDED":"★ מומלץ","↩ bring back":"↩ להחזיר",
 "🕹️ Arcade Library — fast-reflex, single-decision skills":"🕹️ משחקי ארקייד — רפלקסים והחלטות מהירות",
 "🧩 Comprehension Library — reasoning across sentences":"🧩 משחקי הבנה — חשיבה על פני משפטים",
@@ -7252,6 +7412,15 @@ window.__AIBC_HE={
 "⚠ Consent not yet recorded — you'll be asked before the next play session":"⚠ ההסכמה עדיין לא נרשמה — תתבקשו לאשר לפני המשחק הבא"
 };
 window.__AIBC_HE_RX=[
+/* r24: adaptive quest names + reworked hub/lane copy */
+[/^Play (\d+) rounds today$/,"לשחק $1 סיבובים היום"],
+[/^Hit a (\d+)-answer streak$/,"להגיע לרצף של $1 תשובות"],
+[/^Score (\d+)%\+ first-try in a round$/,"לקלוע ‎$1%+ בניסיון ראשון בסיבוב"],
+[/^Play (\d+) different games$/,"לשחק $1 משחקים שונים"],
+[/^Earn (\d+) points today$/,"לצבור $1 נקודות היום"],
+[/^done! \+(\d+)$/,"בוצע! ‎+$1"],
+[/^Best for (.+) — tap to play it in (.+)$/,"הכי מתאים ל$1 — הקישו לשחק ב$2"],
+[/^Build in order: (.+)$/,"בנו לפי הסדר: $1"],
 [/^Round (\d+) complete, (.+)!$/,"סיבוב $1 הושלם, $2!"],
 [/^Campaign complete, (.+)!$/,"הקמפיין הושלם, $1!"],
 [/^\+(\d+) points$/,"‎+$1 נקודות"],
@@ -7280,9 +7449,9 @@ if(LANG==="he"){ try{
   document.documentElement.setAttribute("dir","rtl"); document.documentElement.lang="he";
   SUBJECTS.english.label="אנגלית"; SUBJECTS.math.label="מתמטיקה"; if(SUBJECTS.science) SUBJECTS.science.label="מדעים";
   SPEEDS[0].label="🐢 לאט"; SPEEDS[1].label="🚶 רגיל"; SPEEDS[2].label="⚡ מהיר";
-  QUEST_POOL.forEach(q=>{ q.name={q_games:"לשחק 3 סיבובים היום",q_streak:"להגיע לרצף של 6 תשובות",
-    q_comp:"לסיים משחק הבנה",q_acc:"לקלוע ‎80%+ בניסיון ראשון בסיבוב",q_two:"לשחק 2 משחקים שונים",
-    q_pts:"לצבור 120 נקודות היום"}[q.id]||q.name; });
+  if(typeof SPEED_CHILL!=="undefined") SPEED_CHILL.label="🐌 רגוע";   // r24
+  /* r24: quest names are now generated per-day (adaptive) — Hebrew comes from the
+     dictionary + RX rules above instead of patching QUEST_POOL entries. */
   const HD={
   runner:{goal:"רוצו במסלול! תפסו את שערי המילים הנכונים, קפצו מעל מכשולים, החליקו מתחת לקורות ואספו מטבעות — עד קו הסיום.",controls:"← → נתיבים · ↑ קפיצה · ↓ החלקה (או הכפתורים על המסך)",steps:["המטרה מוצגת למעלה במרכז — פנו לנתיב עם ההתאמה הנכונה.","מכשולים אמיתיים מגיעים: ⤴ קפצו מעל הנמוכים, ⤵ החליקו מתחת לגבוהים.","אספו מטבעות ומגן 🛡️. עברו את כל המילים כדי להגיע לשער הסיום!"]},
   growth:{goal:"הגדילו את היצור שלכם: אכלו את הכדור שהמילה שלו באמת מתאימה. כדור שגוי מקטין אתכם; גרמו ליריב להתרסק על הזנב שלכם!",controls:"הזיזו כדי לנווט · לחיצה ממושכת להאצה",steps:["הצבעים אקראיים — קראו את המילה, לא את הצבע.","אכלו את ההתאמה הנכונה כדי לגדול; כדור שגוי מקטין.","החזיקו להאצה; תמרנו כך שיריב יפגע בזנב שלכם ל־K.O. ‏+15."]},
@@ -12533,9 +12702,11 @@ function makeHuman(colors,opts){
         else o.material.color.copy(suit);
       } else {
         // textured NPCs get a gentle hue shift so no two look identical
+        // r24: keep the shift in the WARM band (peach→gold) — a full random hue
+        // produced greenish/greyish "zombie" NPCs that kids found scary
         const h=(opts.hueSeed!==undefined?opts.hueSeed:Math.random());
-        o.material.color.setHSL(h, 0.18, 0.62+Math.random()*0.1);
-        o.material.color.lerp(new THREE.Color(0xffffff), 0.55);
+        o.material.color.setHSL(0.04+h*0.09, 0.28, 0.68+Math.random()*0.08);
+        o.material.color.lerp(new THREE.Color(0xfff2e4), 0.5);
       }
       if(o.material.roughness!==undefined){ o.material.roughness=0.75; o.material.metalness=0.05; }
     }
@@ -12615,6 +12786,7 @@ function makeHuman(colors,opts){
     chest:mountOn(/mixamorig:?Spine2$/,true)||mountOn(/mixamorig:?Spine1$/,true),
     hips:mountOn(/mixamorig:?Hips$/,true),
     armL:mountOn(/mixamorig:?LeftArm$/), armR:mountOn(/mixamorig:?RightArm$/),
+    foreL:mountOn(/mixamorig:?LeftForeArm$/), foreR:mountOn(/mixamorig:?RightForeArm$/),   // r24: long sleeves
     legUL:mountOn(/mixamorig:?LeftUpLeg$/), legUR:mountOn(/mixamorig:?RightUpLeg$/),
     legLL:mountOn(/mixamorig:?LeftLeg$/), legLR:mountOn(/mixamorig:?RightLeg$/),
     footL:mountOn(/mixamorig:?LeftFoot$/,true), footR:mountOn(/mixamorig:?RightFoot$/,true) };
@@ -12682,18 +12854,28 @@ function buildHumanHead(o){
   /* ---- eyes: eyeball + iris + pupil + LIDS (this is what kills googly-eye) ---- */
   const eyeY=R*0.10*1.08, eyeZface=R*0.80, eyeX=R*0.40;
   const irisCol=o.eyeCol!==undefined?o.eyeCol:[0x5a3a22,0x3a6a8a,0x4a6a3a,0x2a2a30][Math.floor(Math.random()*4)];
+  // r24: friendly brows — never harsh near-black, softened toward the skin so
+  // light-haired characters don't get scary dark slashes over their eyes
+  const browCol=new THREE.Color(o.hairCol!==undefined?o.hairCol:0x4a3220);
+  { const hsl={h:0,s:0,l:0}; browCol.getHSL(hsl);
+    browCol.setHSL(hsl.h, Math.min(hsl.s,0.5), Math.min(0.42,Math.max(hsl.l,0.17)));
+    browCol.lerp(skin,0.18); }
   for(const s of [-1,1]){
-    const eye=mk(new THREE.SphereGeometry(R*0.225,12,10),lam(0xf6f2ec), s*eyeX, eyeY, eyeZface);
+    // r24: brighter whites + bigger iris + catchlight — hollow/dim eyes read scary
+    const eye=mk(new THREE.SphereGeometry(R*0.225,12,10),lam(0xffffff), s*eyeX, eyeY, eyeZface);
     eye.scale.set(1,0.80,0.5);
-    mk(new THREE.SphereGeometry(R*0.115,10,8),lam(irisCol), s*eyeX, eyeY, eyeZface+R*0.075);
-    mk(new THREE.SphereGeometry(R*0.055,8,6),lam(0x101216), s*eyeX, eyeY, eyeZface+R*0.115);
+    mk(new THREE.SphereGeometry(R*0.13,10,8),lam(irisCol), s*eyeX, eyeY, eyeZface+R*0.07);
+    mk(new THREE.SphereGeometry(R*0.058,8,6),lam(0x101216), s*eyeX, eyeY, eyeZface+R*0.115);
+    const spark=mk(new THREE.SphereGeometry(R*0.026,6,5),lam(0xffffff),
+      s*eyeX-s*R*0.04, eyeY+R*0.05, eyeZface+R*0.145);
+    spark.material.emissive&& (spark.material.emissive=new THREE.Color(0x888888));
     // upper + lower lids: skin shells over the eyeball
     const lidU=mk(new THREE.SphereGeometry(R*0.24,12,8,0,Math.PI*2,0,Math.PI*0.40),skinMat, s*eyeX, eyeY+R*0.015, eyeZface);
     lidU.scale.set(1,0.85,0.54);
     const lidL=mk(new THREE.SphereGeometry(R*0.235,12,8,0,Math.PI*2,Math.PI*0.74,Math.PI*0.26),skinMat, s*eyeX, eyeY-R*0.005, eyeZface);
     lidL.scale.set(1,0.85,0.54);
     // brows: thin skin-hugging bars close above the eyes, tilted slightly
-    const brow=mk(new THREE.BoxGeometry(R*0.36,R*0.06,R*0.06),lam(o.hairCol||0x4a3220),
+    const brow=mk(new THREE.BoxGeometry(R*0.36,R*0.055,R*0.06),lam(browCol.getHex()),
       s*eyeX, eyeY+R*0.26, eyeZface+R*0.14);
     brow.rotation.set(-Math.PI*0.06, 0, -s*Math.PI*0.05);
   }
@@ -12711,9 +12893,16 @@ function buildHumanHead(o){
   /* ---- lips: upper thinner/darker, lower fuller ---- */
   const mouthY=-R*0.46*1.08, mouthZ=R*0.88;
   const lipU=mk(new THREE.SphereGeometry(R*0.16,12,8),lam(new THREE.Color(0x9c4f3e).lerp(skin,0.25)), 0, mouthY+R*0.035, mouthZ);
-  lipU.scale.set(1.5,0.30,0.55);
+  lipU.scale.set(1.35,0.30,0.55);
   const lipL=mk(new THREE.SphereGeometry(R*0.15,12,8),lam(new THREE.Color(0xb35f4a).lerp(skin,0.2)), 0, mouthY-R*0.05, mouthZ-R*0.01);
-  lipL.scale.set(1.15,0.42,0.6);
+  lipL.scale.set(1.1,0.42,0.6);
+  // r24: subtle SMILE — an upturned mouth-line arc at the lip seam, corners
+  // lifted, so every face reads friendly instead of blank
+  const smileArc=Math.PI*0.6;
+  const smile=mk(new THREE.TorusGeometry(R*0.19,R*0.034,6,12,smileArc),
+    lam(new THREE.Color(0x8a4638).lerp(skin,0.15)), 0, mouthY+R*0.165, mouthZ+R*0.02);
+  smile.rotation.z=-Math.PI/2-smileArc/2;   // arc centered at the bottom = corners up
+  smile.rotation.x=-0.10;                   // hug the face curvature
 
   /* ---- ears ---- */
   for(const s of [-1,1]){
@@ -12755,18 +12944,29 @@ function buildHumanHead(o){
         c.scale.setScalar(0.9+((i*7)%3)*0.12); }
       hmk(new THREE.SphereGeometry(R*0.66,12,10),0,R*0.62,0);
     } else if(hs==="long"){
-      capMk(Math.PI*0.55,-0.40);
-      const back=hmk(new THREE.SphereGeometry(capR*0.92,14,10),0,-R*0.45,-R*0.52);
-      back.scale.set(0.85,1.5,0.5);
+      /* r24: LONG hair is actually long now — cap, a nape mass hugging the
+         skull, a flowing fall that tapers past the shoulders to MID-BACK,
+         and side curtains framing the face down to the shoulders. */
+      capMk(Math.PI*0.58,-0.40);
+      const nape=hmk(new THREE.SphereGeometry(capR*0.9,16,12),0,-R*0.30,-R*0.42);
+      nape.scale.set(0.98,1.15,0.55);                    // hugs the back of the skull/neck
+      const fall=hmk(new THREE.SphereGeometry(capR*0.78,14,12),0,-R*1.45,-R*0.50);
+      fall.scale.set(0.80,1.75,0.42);                    // sheet flowing down the back
+      const tip=hmk(new THREE.SphereGeometry(capR*0.5,10,8),0,-R*2.75,-R*0.46);
+      tip.scale.set(0.60,0.85,0.40);                     // rounded taper at mid-back
       for(const s of [-1,1]){
-        const side=hmk(new THREE.SphereGeometry(capR*0.5,10,8), s*R*0.88, -R*0.20, R*0.08);
-        side.scale.set(0.4,1.5,0.6);
+        const side=hmk(new THREE.SphereGeometry(capR*0.55,10,8), s*R*0.90, -R*0.55, R*0.10);
+        side.scale.set(0.38,1.75,0.55);                  // face-framing curtains to the shoulders
+        side.rotation.z=s*0.08;
       }
     } else if(hs==="pony"){
       capMk(); bangs();
-      hmk(new THREE.SphereGeometry(R*0.22,8,6),0,R*0.62,-R*0.86);
-      const tail=hmk(new THREE.CylinderGeometry(R*0.13,R*0.20,R*1.2,8),0,-R*0.02,-R*1.00);
-      tail.rotation.x=0.35;
+      hmk(new THREE.SphereGeometry(R*0.22,8,6),0,R*0.62,-R*0.86);           // scrunchie bump
+      /* r24: much longer tail — sweeps down past the nape with a rounded tuft */
+      const tail=hmk(new THREE.CylinderGeometry(R*0.115,R*0.185,R*2.1,8),0,-R*0.42,-R*1.06);
+      tail.rotation.x=0.28;
+      const tuft=hmk(new THREE.SphereGeometry(R*0.20,8,6),0,-R*1.46,-R*1.38);
+      tuft.scale.set(1,1.15,1);
     }
   }
   return G;
@@ -12830,7 +13030,13 @@ function dressHuman(g,o){
   if(o.face!==false){
     hideMannequinHead();
     const HM=D.headMount;
-    const hd=buildHumanHead({ skin:o.skin, eyeCol:o.eyeCol,
+    // r24: iris color is DETERMINISTIC (derived from skin+hair) unless given —
+    // it used to re-roll randomly on every rebuild, so changing skin in the
+    // Style Studio also shuffled your eye color
+    const eyeCol=o.eyeCol!==undefined? o.eyeCol
+      : [0x5a3a22,0x3a6a8a,0x4a6a3a,0x6a4a2a][(((o.skin!==undefined?o.skin:0xf0b98a)>>4)
+         +((o.hairCol!==undefined?o.hairCol:0x4a3220)>>4))%4];
+    const hd=buildHumanHead({ skin:o.skin, eyeCol:eyeCol,
       hair:o.hair||"short", hairCol:o.hairCol });
     hd.position.set(0,HM.y,HM.z);
     head.add(hd);
@@ -12877,25 +13083,99 @@ function dressHuman(g,o){
     return m;
   };
   const trim=o.trim!==undefined?o.trim:0xffffff;
+  /* r24: outfit STYLE — 08-economy tags OUTFITS entries with a style key
+     (hoodie/jersey/jacket/dress/suit). buildAvatar (02, read-only) only
+     forwards colors, so recover the style by matching those colors back to
+     the OUTFITS table. Unmatched outfits keep the classic tee+trousers. */
+  let style=o.style;
+  if(!style&&typeof OUTFITS!=="undefined"&&o.shirt!==null&&o.shirt!==undefined){
+    for(const k in OUTFITS){ const f=OUTFITS[k];
+      if(f&&f.style&&f.torso===o.shirt&&f.legs===o.legs&&f.accent===o.trim){ style=f.style; break; } }
+  }
+  const shade=(c,f)=>new THREE.Color(c).multiplyScalar(f).getHex();
   if(o.shirt!==null&&o.shirt!==undefined&&g.mounts.chest){
+    const C=g.mounts.chest;
     // torso: tapered tee that follows the body — broad at the shoulders,
     // narrower at the waist, flattened front-to-back
-    const tee=mk(g.mounts.chest,new THREE.CylinderGeometry(0.21,0.178,0.46,16),o.shirt,0,-0.05,0);
+    const teeCol=(style==="jacket")? trim : o.shirt;     // jacket opens over an undershirt
+    const tee=mk(C,new THREE.CylinderGeometry(0.21,0.178,0.46,16),teeCol,0,-0.05,0);
     tee.scale.z=0.88;                                    // deep enough to clear the chest
     // ribbed collar + hem band
-    mk(g.mounts.chest,new THREE.CylinderGeometry(0.08,0.092,0.05,12),trim,0,0.205,0.004);
-    const hem=mk(g.mounts.chest,new THREE.CylinderGeometry(0.182,0.184,0.04,16),trim,0,-0.275,0);
+    mk(C,new THREE.CylinderGeometry(0.08,0.092,0.05,12),style==="jacket"?shade(o.shirt,0.7):trim,0,0.205,0.004);
+    const hem=mk(C,new THREE.CylinderGeometry(0.182,0.184,0.04,16),style==="jacket"?shade(o.shirt,0.82):trim,0,-0.275,0);
     hem.scale.z=0.88;
-    // short sleeves riding the upper-arm bones
-    limbPiece("Left","Arm","ForeArm",g.mounts.armL,0.072,0.062,0.62,o.shirt);
-    limbPiece("Right","Arm","ForeArm",g.mounts.armR,0.072,0.062,0.62,o.shirt);
+    // sleeves riding the arm bones — long for jacket/suit/hoodie
+    const longSleeves=(style==="jacket"||style==="suit"||style==="hoodie");
+    limbPiece("Left","Arm","ForeArm",g.mounts.armL,0.072,0.062,longSleeves?1.0:0.62,o.shirt);
+    limbPiece("Right","Arm","ForeArm",g.mounts.armR,0.072,0.062,longSleeves?1.0:0.62,o.shirt);
+    if(longSleeves){
+      limbPiece("Left","ForeArm","Hand",g.mounts.foreL,0.062,0.052,0.85,o.shirt);
+      limbPiece("Right","ForeArm","Hand",g.mounts.foreR,0.062,0.052,0.85,o.shirt);
+    }
+    if(style==="hoodie"){
+      // bunched hood behind the neck + kangaroo pocket + drawstrings
+      const hood=mk(C,new THREE.SphereGeometry(0.135,12,9),shade(o.shirt,0.9),0,0.20,-0.10);
+      hood.scale.set(1.25,0.85,0.9);
+      const pocket=mk(C,new THREE.BoxGeometry(0.22,0.11,0.05),shade(o.shirt,0.82),0,-0.20,0.155);
+      pocket.rotation.x=0.1;
+      for(const s of [-1,1]) mk(C,new THREE.CylinderGeometry(0.009,0.009,0.09,4),trim,s*0.045,0.13,0.176);
+    } else if(style==="jersey"){
+      // big number decal on the chest (canvas texture, trim-colored)
+      try{
+        const cv=document.createElement("canvas"); cv.width=cv.height=128;
+        const cx=cv.getContext("2d");
+        cx.clearRect(0,0,128,128);
+        cx.font="900 96px Arial"; cx.textAlign="center"; cx.textBaseline="middle";
+        cx.lineWidth=12; cx.strokeStyle="#ffffff"; cx.fillStyle="#"+new THREE.Color(trim).getHexString();
+        const num=String(1+((o.shirt||7)%9));            // stable per shirt color
+        cx.strokeText(num,64,68); cx.fillText(num,64,68);
+        const dec=new THREE.Mesh(new THREE.PlaneGeometry(0.19,0.19),
+          new THREE.MeshLambertMaterial({map:new THREE.CanvasTexture(cv),transparent:true}));
+        dec.position.set(0,-0.03,0.176); C.add(dec);
+      }catch(e){}
+    } else if(style==="jacket"){
+      // open-front jacket shell over the undershirt, with a folded collar + zip
+      const shell=new THREE.Mesh(
+        new THREE.CylinderGeometry(0.225,0.20,0.44,16,1,true,0.5,Math.PI*2-1.0),
+        new THREE.MeshLambertMaterial({color:o.shirt,side:THREE.DoubleSide}));
+      shell.position.set(0,-0.045,0); shell.scale.z=0.9; shell.castShadow=true; C.add(shell);
+      mk(C,new THREE.CylinderGeometry(0.10,0.118,0.055,12),shade(o.shirt,0.7),0,0.21,0);
+      mk(C,new THREE.BoxGeometry(0.012,0.34,0.012),0xd8dbe5,0,-0.04,0.187);
+    } else if(style==="suit"){
+      // smart set: white shirt V + folded collar wedges + tie + buttons
+      const vNeck=mk(C,new THREE.BoxGeometry(0.085,0.16,0.03),0xf5f6fa,0,0.10,0.168);
+      vNeck.rotation.x=0.06;
+      for(const s of [-1,1]){
+        const cw=mk(C,new THREE.BoxGeometry(0.078,0.05,0.03),0xf5f6fa,s*0.055,0.165,0.165);
+        cw.rotation.z=s*0.7; cw.rotation.x=0.08;
+      }
+      mk(C,new THREE.BoxGeometry(0.048,0.042,0.03),trim,0,0.145,0.176);   // tie knot
+      const tie=mk(C,new THREE.ConeGeometry(0.036,0.24,4),trim,0,0.012,0.178);
+      tie.rotation.x=Math.PI+0.06;                       // point-down wedge
+      for(const yy of [-0.10,-0.17]) mk(C,new THREE.SphereGeometry(0.012,6,5),trim,0.05,yy,0.172);
+    }
   }
   if(o.legs!==null&&o.legs!==undefined&&g.mounts.hips){
+    const H=g.mounts.hips;
     // real trousers: waistband/seat + two full pant legs (thigh + calf pieces
     // on their own bones, so they bend at the knee)
-    const waist=mk(g.mounts.hips,new THREE.CylinderGeometry(0.188,0.176,0.32,16),o.legs,0,-0.02,0);
-    waist.scale.z=0.85;                                  // tall seat: overlaps the tee hem
-                                                         // above and the thigh tops below
+    // r24: BUTT COVERAGE GUARANTEED (kids' game) — taller & deeper seat
+    // cylinder plus a rear/under seat shell, so no skin shows between the tee
+    // hem and the thighs in any idle/walk/run frame
+    const waist=mk(H,new THREE.CylinderGeometry(0.19,0.182,0.42,16),o.legs,0,-0.04,0);
+    waist.scale.z=0.92;                                  // top overlaps the tee hem,
+                                                         // bottom overlaps the thigh tops
+    const seat=mk(H,new THREE.SphereGeometry(0.175,14,10),o.legs,0,-0.135,-0.012);
+    seat.scale.set(1.02,0.78,0.98);                      // rounds off pelvis + glutes
+    if(style==="dress"){
+      // flared knee-length skirt over the leg pieces (they read as leggings)
+      const skirt=new THREE.Mesh(
+        new THREE.CylinderGeometry(0.185,0.34,0.42,16,1,true),
+        new THREE.MeshLambertMaterial({color:o.legs,side:THREE.DoubleSide}));
+      skirt.position.set(0,-0.30,0); skirt.castShadow=true; H.add(skirt);
+      const hem2=mk(H,new THREE.TorusGeometry(0.34,0.016,6,18),trim,0,-0.512,0);
+      hem2.rotation.x=Math.PI/2;
+    }
     limbPiece("Left","UpLeg","Leg",g.mounts.legUL,0.118,0.092,1.02,o.legs);
     limbPiece("Right","UpLeg","Leg",g.mounts.legUR,0.118,0.092,1.02,o.legs);
     limbPiece("Left","Leg","Foot",g.mounts.legLL,0.092,0.072,0.94,o.legs);
@@ -13373,6 +13653,9 @@ function cityInitInput(){
     const tag=(e.target&&e.target.tagName)||"";
     if(tag==="INPUT"||tag==="TEXTAREA"||tag==="SELECT") return;
     CITY.keys[e.code]=true;
+    // r24: stuck-run sanity — if the browser says Shift ISN'T held, drop the latch
+    // (isTrusted guard: touch buttons dispatch synthetic key events with shiftKey=false)
+    if(e.isTrusted&&!e.shiftKey){ CITY.keys.ShiftLeft=false; CITY.keys.ShiftRight=false; }
     if(CITY.paused) return;
     if(CITY.menuOpen){ if(e.code==="Escape"||e.code==="KeyM"&&CITY.menuOpen==="map") cityCloseMenu&&cityCloseMenu(); return; }
     const busy=!!CITY.activity;   // during a 3D activity, movement keys only
@@ -13394,7 +13677,14 @@ function cityInitInput(){
     }
     if(e.code==="Space") e.preventDefault();
   });
-  document.addEventListener("keyup",(e)=>{ CITY.keys[e.code]=false; });
+  document.addEventListener("keyup",(e)=>{ CITY.keys[e.code]=false;
+    if(e.isTrusted&&!e.shiftKey){ CITY.keys.ShiftLeft=false; CITY.keys.ShiftRight=false; }   // r24
+  });
+  // r24: stuck-run fix — a lost keyup (tab switch, Shift+Tab, window blur) used to
+  // leave the player sprinting forever; clear ALL key state whenever focus leaves
+  const _r24ClearKeys=()=>{ for(const c in CITY.keys) CITY.keys[c]=false; };
+  window.addEventListener("blur",_r24ClearKeys);
+  document.addEventListener("visibilitychange",()=>{ if(document.hidden) _r24ClearKeys(); });
 }
 
 /* ---------------- collision ---------------- */
@@ -13403,9 +13693,23 @@ function collidePlayer(px,pz,r){
   for(const c of CITY.colliders){
     if(c.zone && c.zone!==CITY.zone) continue;
     if(c.y1!==undefined && (_ey>c.y1-0.5 || _ey+1.7<c.y0)) continue;   // fort walls only block at their height
+    if(c.h!==undefined && _ey>c.h-0.12) continue;   // r24: LOW obstacle (fence/bench/hydrant) — feet above its top mid-jump pass right over
     if(c.r!==undefined){
       const dx=px-c.x, dz=pz-c.z, d2=dx*dx+dz*dz, rr=r+c.r;
       if(d2<rr*rr && d2>0.0001){ const d=Math.sqrt(d2); px=c.x+dx/d*rr; pz=c.z+dz/d*rr; }
+    } else if(c.hw!==undefined){
+      // r24: ROTATED building footprint (true OBB) — replaces the old circle
+      // approximation whose open corners let you walk through house walls
+      const dx=px-c.x, dz=pz-c.z;
+      let lx=dx*c.cos-dz*c.sin, lz=dx*c.sin+dz*c.cos;           // world -> box-local
+      const nx=clamp(lx,-c.hw,c.hw), nz=clamp(lz,-c.hd,c.hd);
+      const ddx=lx-nx, ddz=lz-nz, d2=ddx*ddx+ddz*ddz;
+      if(d2<r*r){
+        if(d2>0.0001){ const d=Math.sqrt(d2); lx=nx+ddx/d*r; lz=nz+ddz/d*r; }
+        else { const l=lx+c.hw, rt=c.hw-lx, tp=lz+c.hd, bt=c.hd-lz, m=Math.min(l,rt,tp,bt);
+          if(m===l)lx=-c.hw-r; else if(m===rt)lx=c.hw+r; else if(m===tp)lz=-c.hd-r; else lz=c.hd+r; }
+        px=c.x+lx*c.cos+lz*c.sin; pz=c.z-lx*c.sin+lz*c.cos;     // box-local -> world
+      }
     } else {
       const nx=clamp(px,c.minx,c.maxx), nz=clamp(pz,c.minz,c.maxz);
       const dx=px-nx, dz=pz-nz, d2=dx*dx+dz*dz;
@@ -14723,16 +15027,9 @@ function buildAquarium(){
   CITY.scene.add(B.build()); CITY.scene.add(G.build({glow:true}));
 }
 
-/* ============================================================
-   MASTER BUILD
-   ============================================================ */
-function cityBuildCity(){
-  buildRoadsPlaza();
-  buildStreetGrid(); buildDowntown();
-  buildSports(); buildMotor(); buildSpace(); buildFantasy();
-  buildWild(); buildZoo(); buildAqua(); buildArcade();
-  buildArcadeInterior(); buildMars(); buildAquarium();
-}
+/* r24: the stale unconditional MASTER BUILD that lived here (it built ALL
+   eight districts with no arguments, ignoring the child's interests) is gone.
+   The real, profile-driven cityBuildCity lives in 03x-extra.js. */
 
 
 /* ==== 03x-extra.js ==== */
@@ -15072,6 +15369,181 @@ function buildAmbient(){
 }
 
 /* ============================================================
+   r24: STRICT DISTRICT SELECTION — only interests the child ACTUALLY picked
+   build a district. The old matcher used raw substring includes(), so tags
+   like "art"/"cat"/"bak" fired inside unrelated words ("smart", "education",
+   …) and playtesters got districts (e.g. the farm) they never chose. Tags now
+   only match at the START of a word, and the classic default set is used ONLY
+   when nothing matches at all (no more silent top-ups).
+   ============================================================ */
+const _selectDistrictsLoose=selectDistricts;
+selectDistricts=function(){
+  const raw=((CONFIG.interestText||"")+" "+(CONFIG.interests||[]).join(" ")).toLowerCase();
+  const esc=(s)=>s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+  const hit=(tg)=>new RegExp("(^|[^a-z])"+esc(tg)).test(raw);   // word-START match
+  const scored=DISTRICT_CATALOG.map(c=>({c, s:c.tags.reduce((n,tg)=>n+(hit(tg)?3:0),0)}));
+  let picked=scored.filter(x=>x.s>0).sort((a,b)=>b.s-a.s).map(x=>x.c);
+  const core=DISTRICT_CATALOG.find(c=>c.always);                // the arcade — the one true core
+  if(core && picked.indexOf(core)<0) picked.push(core);
+  if(picked.length<=1){                                         // NOTHING matched -> minimal defaults
+    [...DISTRICT_CATALOG].sort((a,b)=>b.base-a.base).forEach(c=>{
+      if(picked.length<4 && picked.indexOf(c)<0) picked.push(c); });
+  }
+  if(picked.length>8){ picked=picked.slice(0,8);
+    if(core && picked.indexOf(core)<0) picked[7]=core; }        // never lose the arcade
+  picked.sort((a,b)=>DISTRICT_CATALOG.indexOf(a)-DISTRICT_CATALOG.indexOf(b));
+  DISTRICTS=picked.map((c,i)=>{
+    const d=Object.assign({},c);
+    const cell=DISTRICT_CELLS[i%DISTRICT_CELLS.length];
+    d.x=cell[0]; d.z=cell[1];
+    d.rad=Math.atan2(-d.z,d.x); d.ang=d.rad/DEG;
+    return d;
+  });
+  DISTRICT_BY_KEY={}; DISTRICTS.forEach(d=>DISTRICT_BY_KEY[d.key]=d);
+  return DISTRICTS;
+};
+
+/* ============================================================
+   r24: ISLAND WORLDS — Glacier Isle (ice) & Ember Isle (lava).
+   Far offshore (±3200), fixed sky per zone, reachable ONLY via the travel
+   map (cityOpenTravel / cityTravelTo in 06-venues). GeoBatch throughout.
+   ============================================================ */
+function buildIceWorld(){
+  const o=ZONES.ice.origin, B=new GeoBatch(), G=new GeoBatch(), R=105;
+  const L=(lx,lz)=>({x:o[0]+lx, z:o[1]+lz});
+  // snow ground + icy shore rim (sits on the ocean skirt)
+  const snow=new THREE.Mesh(new THREE.CircleGeometry(R,48),new THREE.MeshLambertMaterial({color:0xf2f7fd}));
+  snow.rotation.x=-Math.PI/2; snow.position.set(o[0],0.02,o[1]); snow.receiveShadow=true; CITY.scene.add(snow);
+  const rim=new THREE.Mesh(new THREE.RingGeometry(R-2,R+8,48),new THREE.MeshLambertMaterial({color:0xbfe0f0,transparent:true,opacity:0.85}));
+  rim.rotation.x=-Math.PI/2; rim.position.set(o[0],-0.15,o[1]); CITY.scene.add(rim);
+  // frozen pond with a lit rink ring
+  const pd=L(-34,-22);
+  const pond=new THREE.Mesh(new THREE.CircleGeometry(14,28),new THREE.MeshLambertMaterial({color:0xcfeaff}));
+  pond.rotation.x=-Math.PI/2; pond.position.set(pd.x,0.07,pd.z); pond.receiveShadow=true; CITY.scene.add(pond);
+  G.tor(14,0.16,0x9ef0ff,pd.x,0.12,pd.z,Math.PI/2);
+  // snowy pines
+  const spots=[[-15,25],[22,30],[38,12],[-42,8],[-20,-45],[10,-38],[44,-32],[-52,-2],[30,52],[-38,38],[55,28],[-8,-60]];
+  spots.forEach(([lx,lz])=>{ const p=L(lx,lz), s=rand(0.9,1.5);
+    propPine(B,p.x,p.z,s);
+    B.cone(0.78*s,1.0*s,0xf2f7fd,p.x,5.15*s,p.z,7);              // snow cap
+    B.sph(0.5*s,0xffffff,p.x+0.6*s,3.4*s,p.z,6,5,0.6);           // snow clump
+  });
+  // igloos
+  [[32,-26,0],[-30,28,2.4]].forEach(([lx,lz,ry])=>{ const p=L(lx,lz);
+    B.sph(3.4,0xffffff,p.x,0.7,p.z,12,9,0.8);
+    B.box(2.0,1.7,2.4,0xf2f7fd,p.x+Math.sin(ry)*3.2,0.85,p.z+Math.cos(ry)*3.2,ry);
+    B.box(1.1,1.2,0.3,0x18344a,p.x+Math.sin(ry)*4.3,0.7,p.z+Math.cos(ry)*4.3,ry);
+    addColl(p.x,p.z,3.6,"ice");
+  });
+  // ice spires + snowman
+  [[52,4],[-52,-28],[8,-52],[-6,58]].forEach(([lx,lz],i)=>{ const p=L(lx,lz);
+    B.cone(rand(1.2,2.0),rand(4.5,8),0xbfe4ff,p.x,rand(2.2,4),p.z,6);
+    B.cone(0.8,3,0xdff2ff,p.x+1.6,1.5,p.z+0.8,5);
+    addColl(p.x,p.z,1.8,"ice"); });
+  const sm=L(12,22);
+  B.sph(1.0,0xffffff,sm.x,0.9,sm.z,10,8); B.sph(0.72,0xffffff,sm.x,2.1,sm.z,9,7); B.sph(0.5,0xffffff,sm.x,3.05,sm.z,9,7);
+  B.cone(0.09,0.5,0xff7a3d,sm.x,3.05,sm.z+0.55,5,Math.PI/2);      // carrot
+  B.cyl(0.55,0.55,0.1,0x1c1c26,sm.x,3.45,sm.z,8); B.cyl(0.34,0.36,0.5,0x1c1c26,sm.x,3.7,sm.z,8);
+  addColl(sm.x,sm.z,1.1,"ice");
+  // spawn pad + world sign + travel beacon (the only way home)
+  const sp=L(0,44);
+  B.cyl(3,3.3,0.3,0x9ab8d0,sp.x,0.15,sp.z,14);
+  G.tor(3.0,0.08,0x9ef0ff,sp.x,0.36,sp.z,Math.PI/2);
+  const ws=makeTextSprite("❄️ GLACIER ISLE",{px:46,scale:0.013,bg:"rgba(10,30,52,.85)"});
+  ws.position.set(sp.x,7.4,sp.z); CITY.scene.add(ws);
+  const tb=L(9,38); cityBuildTravelBeacon(B,G,tb.x,tb.z,"ice");
+  // 4 game pads — cool-headed / precision games, ocean(icy) 2D skin via zone
+  const pads=[
+    [-22,  8, "🎯","Ice Target Range", "steady aim on the frozen ridge", ["shooter"]],
+    [ 22,  8, "🏀","Frozen Free-Throw","swish it before you shiver",     ["hoops"]],
+    [-22,-20, "🧱","Snow-Fort Defense","place your walls just right",    ["lane"]],
+    [ 22,-20, "🐍","Frost Serpent",    "grow the ice snake, orb by orb", ["growth"]],
+  ];
+  pads.forEach(([lx,lz,ico,label,sub,games])=>{ const p=L(lx,lz);
+    cityVenuePad(B,G,p.x,p.z,Math.atan2(o[0]-p.x,o[1]+30-p.z),{ico,label,sub,games,zone:"ice",accent:0x9ef0ff,screen:0xdff2ff,body:0x2a4058});
+  });
+  // gentle falling snow (one Points cloud, wrap on Y)
+  const sg=new THREE.BufferGeometry(), N=150, arr=new Float32Array(N*3);
+  for(let i=0;i<N;i++){ const a=rand(0,6.28), r=rand(0,R-8);
+    arr[i*3]=o[0]+Math.cos(a)*r; arr[i*3+1]=rand(0,26); arr[i*3+2]=o[1]+Math.sin(a)*r; }
+  sg.setAttribute("position",new THREE.BufferAttribute(arr,3));
+  const flakes=new THREE.Points(sg,new THREE.PointsMaterial({color:0xffffff,size:2.6,sizeAttenuation:false,transparent:true,opacity:0.85}));
+  CITY.scene.add(flakes);
+  CITY.dyn.push({update:(dt,t)=>{ if(CITY.zone!=="ice") return;
+    const p2=sg.attributes.position;
+    for(let i=0;i<N;i++){ let y=p2.getY(i)-dt*(2.2+(i%5)*0.5); if(y<0) y=26; p2.setY(i,y); }
+    p2.needsUpdate=true; }});
+  CITY.scene.add(B.build()); CITY.scene.add(G.build({glow:true}));
+}
+
+function buildLavaWorld(){
+  const o=ZONES.lava.origin, B=new GeoBatch(), G=new GeoBatch(), R=105;
+  const L=(lx,lz)=>({x:o[0]+lx, z:o[1]+lz});
+  // dark volcanic rock ground + scorched rim
+  const rock=new THREE.Mesh(new THREE.CircleGeometry(R,48),new THREE.MeshLambertMaterial({color:0x241a1c}));
+  rock.rotation.x=-Math.PI/2; rock.position.set(o[0],0.02,o[1]); rock.receiveShadow=true; CITY.scene.add(rock);
+  const rim=new THREE.Mesh(new THREE.RingGeometry(R-2,R+8,48),new THREE.MeshLambertMaterial({color:0x140c0e,transparent:true,opacity:0.9}));
+  rim.rotation.x=-Math.PI/2; rim.position.set(o[0],-0.15,o[1]); CITY.scene.add(rim);
+  // volcano cone with a glowing crater
+  const vc=L(0,-58);
+  B.cone(30,26,0x3a2426,vc.x,13,vc.z,12);
+  B.cone(24,6,0x2a1a1c,vc.x,26.5,vc.z,12);
+  addColl(vc.x,vc.z,24,"lava");
+  const crater=new THREE.Mesh(new THREE.CircleGeometry(8,16),new THREE.MeshBasicMaterial({color:0xff8a2a}));
+  crater.rotation.x=-Math.PI/2; crater.position.set(vc.x,26.2,vc.z); CITY.scene.add(crater);
+  // lava pools + a river running off the volcano (emissive, pulsing)
+  const lavaMat=new THREE.MeshBasicMaterial({color:0xff6a2a});
+  const lavas=[crater];
+  [[-34,-16,10],[30,-30,8],[0,-8,7]].forEach(([lx,lz,r])=>{ const p=L(lx,lz);
+    const pool=new THREE.Mesh(new THREE.CircleGeometry(r,20),lavaMat.clone());
+    pool.rotation.x=-Math.PI/2; pool.position.set(p.x,0.07,p.z); CITY.scene.add(pool); lavas.push(pool);
+    B.tor(r+0.6,0.5,0x161014,p.x,0.2,p.z,Math.PI/2);             // rock lip
+  });
+  const rv=L(0,-33);
+  const river=new THREE.Mesh(new THREE.PlaneGeometry(5.5,44),lavaMat.clone());
+  river.rotation.x=-Math.PI/2; river.position.set(rv.x,0.06,rv.z); CITY.scene.add(river); lavas.push(river);
+  CITY.dyn.push({update:(dt,t)=>{ if(CITY.zone!=="lava") return;
+    const g=0.5+Math.sin(t*2.6)*0.22;
+    lavas.forEach((m,i)=>m.material.color.setHSL(0.05+Math.sin(t*1.7+i)*0.015,1,g)); }});
+  // obsidian spires + glow rocks
+  [[46,10],[-48,6],[-20,-44],[38,-48],[-52,-30],[16,56]].forEach(([lx,lz])=>{ const p=L(lx,lz);
+    B.cone(rand(1.4,2.4),rand(5,9.5),0x1a1420,p.x,rand(2.5,4.5),p.z,5);
+    B.cone(rand(0.7,1.1),rand(2.5,4),0x241a2a,p.x+1.8,1.6,p.z+0.9,4);
+    addColl(p.x,p.z,2.0,"lava"); });
+  for(let i=0;i<8;i++){ const a=i/8*6.28, p=L(Math.cos(a)*rand(20,60),Math.sin(a)*rand(20,60));
+    G.sph(rand(0.25,0.5),0xff9a4d,p.x,0.3,p.z,6,5); }
+  // spawn pad + world sign + travel beacon
+  const sp=L(0,44);
+  B.cyl(3,3.3,0.3,0x4a3034,sp.x,0.15,sp.z,14);
+  G.tor(3.0,0.08,0xff8a2a,sp.x,0.36,sp.z,Math.PI/2);
+  const ws=makeTextSprite("🌋 EMBER ISLE",{px:46,scale:0.013,bg:"rgba(40,12,8,.85)"});
+  ws.position.set(sp.x,7.4,sp.z); CITY.scene.add(ws);
+  const tb=L(9,38); cityBuildTravelBeacon(B,G,tb.x,tb.z,"lava");
+  // 4 game pads — fast / reflex games, fiery fantasy 2D skin via zone
+  const pads=[
+    [-24, 12, "🏃","Lava Dash",     "sprint the cooling crust",        ["runner"]],
+    [ 24, 12, "🚀","Magma Jetpack", "thrust over the ember geysers",   ["jetpack"]],
+    [-24,-16, "🏍️","Crater Cross",  "ride the ridge, hit the ramps",   ["motox"]],
+    [ 24,-16, "🎵","Ember Beat",    "tap to the volcano's rumble",     ["rhythm"]],
+  ];
+  pads.forEach(([lx,lz,ico,label,sub,games])=>{ const p=L(lx,lz);
+    cityVenuePad(B,G,p.x,p.z,Math.atan2(o[0]-p.x,o[1]+30-p.z),{ico,label,sub,games,zone:"lava",accent:0xff8a2a,screen:0xffc24d,body:0x35242a});
+  });
+  // rising embers (one Points cloud, wrap on Y)
+  const eg=new THREE.BufferGeometry(), N=120, arr=new Float32Array(N*3);
+  for(let i=0;i<N;i++){ const a=rand(0,6.28), r=rand(0,R-10);
+    arr[i*3]=o[0]+Math.cos(a)*r; arr[i*3+1]=rand(0,20); arr[i*3+2]=o[1]+Math.sin(a)*r; }
+  eg.setAttribute("position",new THREE.BufferAttribute(arr,3));
+  const embers=new THREE.Points(eg,new THREE.PointsMaterial({color:0xffa53d,size:2.4,sizeAttenuation:false,transparent:true,opacity:0.8}));
+  CITY.scene.add(embers);
+  CITY.dyn.push({update:(dt,t)=>{ if(CITY.zone!=="lava") return;
+    const p2=eg.attributes.position;
+    for(let i=0;i<N;i++){ let y=p2.getY(i)+dt*(1.6+(i%4)*0.6); if(y>20) y=0; p2.setY(i,y); }
+    p2.needsUpdate=true; }});
+  CITY.scene.add(B.build()); CITY.scene.add(G.build({glow:true}));
+}
+
+/* ============================================================
    MASTER BUILD v2 — the city assembles itself from the profile
    ============================================================ */
 const DISTRICT_BUILDERS={ sports:buildSports, motor:buildMotor, space:buildSpace, fantasy:buildFantasy,
@@ -15085,6 +15557,7 @@ function cityBuildCity(){
   if(DISTRICT_BY_KEY.arcade) buildArcadeInterior();
   if(DISTRICT_BY_KEY.space) buildMars();
   if(DISTRICT_BY_KEY.aqua) buildAquarium();
+  buildIceWorld(); buildLavaWorld();        // r24: island worlds, travel-map only
   buildAmbient();
 }
 
@@ -16296,8 +16769,8 @@ function buildTowerBlock(bx,bz,idx){
     }
   }
   // an alley dumpster + hydrant for flavor
-  B.box(2.2,1.3,1.2,0x2e7a4e,bx+(idx%2?18:-18),0.7,bz,0.3); addColl(bx+(idx%2?18:-18),bz,1.4);
-  B.cyl(0.22,0.26,0.8,0xd83a3a,bx-52,0.4,bz-52,7); addColl(bx-52,bz-52,0.32);
+  B.box(2.2,1.3,1.2,0x2e7a4e,bx+(idx%2?18:-18),0.7,bz,0.3); CITY.colliders.push({x:bx+(idx%2?18:-18),z:bz,r:1.4,h:1.55}); // r24: jumpable
+  B.cyl(0.22,0.26,0.8,0xd83a3a,bx-52,0.4,bz-52,7); CITY.colliders.push({x:bx-52,z:bz-52,r:0.32,h:1.0}); // r24: jumpable
   CITY.scene.add(B.build());
   CITY.scene.add(G.build({glow:true}));
 }
@@ -16924,8 +17397,8 @@ function buildRowhouseBlock(bx,bz){
     regDoor(x+3.4, z+sf*8.6, "apartment", houseNames[i], sf>0?Math.PI:0);
   }
   // back alley clutter (BEHIND the houses)
-  B.box(2.2,1.3,1.2,0x2e7a4e,bx-20,0.7,bz-sf*34,0.4); addColl(bx-20,bz-sf*34,1.4);
-  B.box(2.2,1.3,1.2,0x6a7188,bx+24,0.7,bz-sf*34,-0.3); addColl(bx+24,bz-sf*34,1.4);
+  B.box(2.2,1.3,1.2,0x2e7a4e,bx-20,0.7,bz-sf*34,0.4); CITY.colliders.push({x:bx-20,z:bz-sf*34,r:1.4,h:1.55}); // r24: jumpable
+  B.box(2.2,1.3,1.2,0x6a7188,bx+24,0.7,bz-sf*34,-0.3); CITY.colliders.push({x:bx+24,z:bz-sf*34,r:1.4,h:1.55}); // r24: jumpable
   CITY.scene.add(B.build());
   CITY.scene.add(G.build({glow:true}));
 }
@@ -17480,10 +17953,46 @@ function cityTopicLabel(){
 }
 function cityLaunchGame(tplId, opts){
   const tpl=TEMPLATES.find(x=>x.id===tplId); if(!tpl) return;
+  opts=opts||{};
+  // r24: theme-match the 2D game to WHERE it was launched — a district (or
+  // island world) hands its skin to the game; plaza/downtown keep the child's own
+  const place=(opts.themeKey!==undefined)?opts.themeKey
+    :(CITY_DISTRICT_THEME[CITY.zone]!==undefined?CITY_DISTRICT_THEME[CITY.zone]:CITY_DISTRICT_THEME[CITY.district]);
+  CITY._themeOverride=place||null;
   cityPauseForGame();
-  launch(tpl, subjectFitFor(tpl), opts||{});
+  launch(tpl, subjectFitFor(tpl), opts);
 }
 function subjectFitFor(tpl){ return citySubject(); }
+
+/* r24: district/world -> 2D SKIN theme key (cosmetic only, THEMES in platform)
+   and -> preferred game templates, so venue games FIT their neighborhood. */
+const CITY_DISTRICT_THEME={ sports:"sports", motor:"sports", space:"space", fantasy:"fantasy",
+  wild:"animals", zoo:"animals", aqua:"ocean", farm:"animals", fashion:"fantasy", art:"space",
+  mars:"space", aquarium:"ocean", ice:"ocean", lava:"fantasy" };
+const CITY_DISTRICT_GAMES={
+  sports:["hoops","runner","motox","shooter"],
+  motor:["motox","runner","jetpack","shooter"],
+  space:["jetpack","shooter","coop","systemslab","runner","blueprint"],
+  fantasy:["branch","rhythm","rebuttal","casefile","growth"],
+  wild:["casefile","caseload","branch","growth","runner"],
+  zoo:["runner","growth","shooter","lane","station"],
+  aqua:["growth","lane","coop","casefile","jetpack"],
+  arcade:["runner","jetpack","hoops","station"],
+  fashion:["station","lane","rhythm","growth","branch"],
+  art:["blueprint","branch","lane","station"],
+  farm:["station","growth","lane","runner"],
+  ice:["shooter","hoops","lane","growth"],
+  lava:["runner","jetpack","motox","rhythm"] };
+/* r24: activeTheme override — active ONLY while a city-launched 2D game/overlay
+   is up (CITY.paused); back in the 3D world the child's own theme returns. */
+if(typeof activeTheme==="function" && !window._cityBaseActiveTheme){
+  window._cityBaseActiveTheme=activeTheme;
+  activeTheme=function(){
+    const k=CITY._themeOverride;
+    if(k && CITY.active && CITY.paused && typeof THEMES!=="undefined" && THEMES[k]) return THEMES[k];
+    return window._cityBaseActiveTheme();
+  };
+}
 
 /* ---------------- ONE study subject for the whole session ----------------
    Chosen once (defaults to the questionnaire's top priority). Changed ONLY
@@ -17564,6 +18073,11 @@ function openVenue(title, sub, tplIds, opts){
   const subject=citySubject();
   const all=tplIds.map(id=>TEMPLATES.find(x=>x.id===id)).filter(Boolean);
   const tpls=all.filter(tpl=>subjectFits(tpl, subject));
+  // r24: list the games this neighborhood prefers FIRST (theme fit), rest after
+  const prefKey=CITY_DISTRICT_GAMES[CITY.zone]?CITY.zone:CITY.district;
+  const pref=CITY_DISTRICT_GAMES[prefKey]||[];
+  tpls.sort((a,b)=>{ const ia=pref.indexOf(a.id), ib=pref.indexOf(b.id);
+    return (ia<0?99:ia)-(ib<0?99:ib); });
   if(!tpls.length){
     const nf=cityModal(title,"", `<div style="text-align:center;font-size:15px;line-height:1.7">
       <div style="font-size:38px">📖</div>
@@ -17648,6 +18162,132 @@ function cityBuildVenues(){
     I.push({x:ap.x,z:ap.z,r:3,icon:"🐠",label:"Reef Fact Station "+(i+1), zone:"aquarium",
       action:()=>runFactStation(ap,i)});
   });
+  // r24: top-up game kiosks (every district ≥4 games) + the plaza Travel Port
+  cityBuildGamePads();
+  cityBuildTravelPort();
+}
+
+/* ============================================================
+   r24: VENUE GAME PADS — a themed arcade kiosk that opens a set of games.
+   Reused by district top-ups AND the island worlds (ice/lava).
+   Geometry goes into the caller's GeoBatches (one merged mesh per group).
+   ============================================================ */
+function cityVenuePad(B,G,x,z,yaw,o){
+  const acc=o.accent||0x18f0c8, body=o.body||0x2a2f45;
+  B.cyl(2.6,2.9,0.36,0x8a93ab,x,0.18,z,12);                     // pad base
+  G.tor(2.55,0.07,acc,x,0.42,z,Math.PI/2);                      // lit ring
+  B.box(2.0,3.0,1.5,body,x,1.86,z,yaw);                         // cabinet
+  B.box(2.2,0.6,1.9,0x3a3f65,x,0.3,z,yaw);                      // kick base
+  G.box(1.5,1.1,0.14,o.screen||0x9ef0ff,
+    x+Math.sin(yaw)*0.78,2.45,z+Math.cos(yaw)*0.78,yaw);        // glowing screen
+  G.box(2.2,0.5,1.6,acc,x,3.55,z,yaw);                          // neon marquee
+  addColl(x,z,1.6,o.zone);
+  const sp=makeTextSprite(o.ico+" "+o.label,{px:30,scale:0.01});
+  sp.position.set(x,4.7,z); CITY.scene.add(sp);
+  CITY.interactables.push({x:x+Math.sin(yaw)*2.3,z:z+Math.cos(yaw)*2.3,r:3.4,
+    icon:o.ico, label:o.label+" — play!", zone:o.zone,
+    action:()=>openVenue(o.ico+" "+o.label, o.sub||"", o.games, o.themeKey!==undefined?{themeKey:o.themeKey}:{})});
+}
+
+/* per-district kiosk spot + flavor; games = district favorites MINUS what the
+   district's built-in venues already launch, so every district reaches ≥4 */
+const CITY_PAD_DEFS={
+  sports: {at:[ 20, 58], ico:"🏅", label:"Training Arcade",  sub:"sports drills, tuned to your topic", accent:0x57d98a},
+  motor:  {at:[  0,  6], ico:"🏁", label:"Infield Arcade",   sub:"pedal-to-the-metal games",           accent:0xff7a3d},
+  space:  {at:[  0, 10], ico:"🛰️", label:"Cadet Arcade",     sub:"flight-training simulators",         accent:0x6ea8ff},
+  fantasy:{at:[-22, 32], ico:"🔮", label:"Scrying Arcade",   sub:"quests inside the crystal",          accent:0xb98bff},
+  wild:   {at:[  0, 30], ico:"🎒", label:"Ranger Arcade",    sub:"trail games at the trailhead",       accent:0x7ac74f},
+  zoo:    {at:[-12, 50], ico:"🐾", label:"Safari Arcade",    sub:"animal games by the gate",           accent:0xffc24d},
+  aqua:   {at:[  8, 50], ico:"🐚", label:"Boardwalk Arcade", sub:"beach games in the sand",            accent:0x37d0e0},
+  fashion:{at:[ 14, 54], ico:"💄", label:"Style Arcade",     sub:"design games off the runway",        accent:0xff8bd8},
+  art:    {at:[  0, 48], ico:"🖌️", label:"Studio Arcade",    sub:"maker games in the gallery",         accent:0xffa53d},
+  farm:   {at:[-14, 34], ico:"🌽", label:"Barnyard Arcade",  sub:"harvest games by the garden",        accent:0xd8b84a},
+};
+const CITY_VENUE_BUILTIN={ sports:["hoops"], motor:["motox"], space:["shooter","coop","systemslab"],
+  fantasy:["rhythm","branch","rebuttal"], wild:["casefile","caseload","branch"], zoo:["runner"],
+  aqua:["growth","lane"] };   // arcade: 16 cabinets + Order Up! already ≥4
+function cityBuildGamePads(){
+  const B=new GeoBatch(), G=new GeoBatch();
+  DISTRICTS.forEach(d=>{
+    const def=CITY_PAD_DEFS[d.key]; if(!def) return;
+    const have=CITY_VENUE_BUILTIN[d.key]||[];
+    const games=(CITY_DISTRICT_GAMES[d.key]||[]).filter(id=>have.indexOf(id)<0);
+    if(!games.length) return;
+    const F=districtFrame(d), p=F.L(def.at[0],def.at[1]);
+    cityVenuePad(B,G,p.x,p.z,F.yaw,{ico:def.ico,label:def.label,sub:def.sub,games,accent:def.accent});
+  });
+  CITY.scene.add(B.build()); CITY.scene.add(G.build({glow:true}));
+}
+
+/* ============================================================
+   r24: ISLAND WORLDS + TRAVEL — Animal-Jam-style separate worlds, reachable
+   ONLY through the travel map. ZONES entries put them far offshore so fog
+   (far 520 in fixed-sky zones) guarantees they never render together.
+   ============================================================ */
+ZONES.ice ={ origin:[-3200,-3200], sky:{top:0xa8d4f0, fog:0xc8e6f5, amb:0.95} };
+ZONES.lava={ origin:[ 3200,-3200], sky:{top:0x1a0d12, fog:0x30161a, amb:0.72} };
+CITY.worlds={
+  island:{id:"island", name:"The City",     ico:"🌆", sub:"home sweet home",
+    spawn:{x:6, z:30, yaw:0}, music:"lobby"},
+  ice:   {id:"ice",    name:"Glacier Isle", ico:"❄️", sub:"snow, ice & cool-headed games",
+    spawn:{x:ZONES.ice.origin[0],  z:ZONES.ice.origin[1]+44,  yaw:0}, music:"wonder"},
+  lava:  {id:"lava",   name:"Ember Isle",   ico:"🌋", sub:"lava rivers & lightning reflexes",
+    spawn:{x:ZONES.lava.origin[0], z:ZONES.lava.origin[1]+44, yaw:0}, music:"hype"},
+};
+function cityTravelTo(worldId){
+  const w=CITY.worlds&&CITY.worlds[worldId]; if(!w||!ZONES[w.id]) return;
+  cityCloseMenu&&cityCloseMenu(true);
+  cityTeleport(w.id, w.spawn.x, w.spawn.z, w.spawn.yaw||0);
+  cityBannerText(w.ico+" "+w.name, w.sub||"");
+  if(typeof SND!=="undefined" && !SND.muted && MUSIC.start) MUSIC.start(w.music||"lobby", activeTheme());
+}
+function cityOpenTravel(){
+  const m=cityModal("🎈 Travel Map","hot-air balloon service — pick a world!",
+    `<div id="tv-grid" class="cgrid"></div>`,{id:"travel"});
+  const grid=m.querySelector("#tv-grid");
+  Object.keys(CITY.worlds).forEach(k=>{
+    const w=CITY.worlds[k], here=(CITY.zone===w.id);
+    const card=document.createElement("div"); card.className="citem";
+    card.innerHTML=`<div class="ic">${w.ico}</div><h4>${w.name}</h4>
+      <div style="font-size:11px;color:#9aa3d0">${w.sub||""}</div>
+      <button class="cbtn ${here?"ghost":"buy"}" style="margin-top:6px" ${here?"disabled":""}>${here?"📍 You are here":"🎈 Fly there"}</button>`;
+    if(!here) card.querySelector("button").onclick=()=>cityTravelTo(w.id);
+    grid.appendChild(card);
+  });
+}
+window.cityTravelTo=cityTravelTo; window.cityOpenTravel=cityOpenTravel;
+
+/* plaza Travel Port: a bobbing hot-air balloon by the welcome arch */
+function cityBuildTravelPort(){
+  const B=new GeoBatch(), G=new GeoBatch(), tp={x:16,z:42};
+  B.cyl(3.2,3.5,0.4,0x9aa3bb,tp.x,0.2,tp.z,14);
+  G.tor(3.15,0.07,0xffd75c,tp.x,0.44,tp.z,Math.PI/2);
+  addColl(tp.x,tp.z,1.7);
+  const bal=new THREE.Group(), M=(c)=>new THREE.MeshLambertMaterial({color:c});
+  const env=new THREE.Mesh(new THREE.SphereGeometry(2.7,12,10),M(0xff5d8a)); env.scale.y=1.18; env.position.y=6.6; env.castShadow=true; bal.add(env);
+  const band=new THREE.Mesh(new THREE.TorusGeometry(2.5,0.32,8,16),M(0xffd75c)); band.rotation.x=Math.PI/2; band.position.y=6.6; bal.add(band);
+  const basket=new THREE.Mesh(new THREE.BoxGeometry(1.7,1.2,1.7),M(0x8a6a45)); basket.position.y=2.6; basket.castShadow=true; bal.add(basket);
+  for(const [ox,oz] of [[-0.7,-0.7],[0.7,-0.7],[-0.7,0.7],[0.7,0.7]]){
+    const rope=new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.04,2.2,4),M(0xd8d2c4));
+    rope.position.set(ox,4.2,oz); bal.add(rope); }
+  bal.position.set(tp.x,0.4,tp.z); CITY.scene.add(bal);
+  CITY.dyn.push({update:(dt,t)=>{ bal.position.y=0.4+Math.sin(t*1.1)*0.35; bal.rotation.y=Math.sin(t*0.4)*0.2; }});
+  const sp=makeTextSprite("🎈 Travel Port — fly to island worlds!",{px:32,scale:0.011});
+  sp.position.set(tp.x,10.6,tp.z); CITY.scene.add(sp);
+  CITY.scene.add(B.build()); CITY.scene.add(G.build({glow:true}));
+  CITY.interactables.push({x:tp.x,z:tp.z+3,r:4.4,icon:"🎈",label:"Travel Port — see the world map",
+    action:()=>cityOpenTravel()});
+}
+/* travel beacon used on each island (the only way back) */
+function cityBuildTravelBeacon(B,G,x,z,zone){
+  B.cyl(0.16,0.2,3.6,0x3a3f55,x,1.8,z,6);
+  G.box(2.4,1.6,0.14,0x9ef0ff,x,3.4,z,0);
+  G.sph(0.24,0xffd75c,x,4.5,z,7,5);
+  addColl(x,z,0.5,zone);
+  const sp=makeTextSprite("🎈 Travel Map — fly home",{px:30,scale:0.01});
+  sp.position.set(x,5.5,z); CITY.scene.add(sp);
+  CITY.interactables.push({x:x,z:z+2,r:3.6,icon:"🎈",label:"Travel Map — fly to another world", zone,
+    action:()=>cityOpenTravel()});
 }
 function cityBannerText(h,p){
   const b=CITY.ui.ban; b.querySelector("h2").textContent=h; b.querySelector("p").textContent=p;
@@ -17759,6 +18399,44 @@ function cityWrongModal(it, onDone){
 function ansSprite(text,color){ return makeTextSprite(String(text),{px:52,scale:0.016,bg:color||"rgba(12,16,48,.92)"}); }
 /* camera aim direction */
 function aimDir(){ const d=new THREE.Vector3(); CITY.camera.getWorldDirection(d); return d; }
+
+/* r24: big floating score popup (unmistakable "you scored" feedback) */
+function actPopup(txt,color){
+  const d=document.createElement("div");
+  d.style.cssText="position:absolute;left:50%;top:38%;transform:translate(-50%,-50%) scale(.6);"+
+    "font-family:inherit;font-weight:900;font-size:44px;color:"+(color||"#ffd75c")+";"+
+    "text-shadow:0 3px 14px rgba(0,0,0,.65);z-index:12;pointer-events:none;transition:all .9s ease-out;opacity:1;white-space:nowrap";
+  d.textContent=txt;
+  document.getElementById("scr-city").appendChild(d);
+  requestAnimationFrame(()=>{ d.style.transform="translate(-50%,-95%) scale(1.15)"; d.style.opacity=0; });
+  setTimeout(()=>d.remove(),950);
+}
+/* r24: celebration — balloons on strings rise & fade + confetti burst at the score spot */
+function cityCelebrate(x,y,z){
+  [0xff5d8a,0x9ef0ff,0xffd75c,0x57d98a,0xb98bff].forEach(c=>
+    cityPuff(x,y,z,{n:6,color:c,size:0.22,spread:1.1,up:3.2,life:1.1,gravity:2.6,additive:true}));
+  SND.win&&SND.win();
+  const G=new THREE.Group(); CITY.scene.add(G);
+  const mats=[], B=[];
+  for(let i=0;i<7;i++){
+    const c=[0xd83a3a,0x3f8ad9,0xffd75c,0x57d98a,0xb98bff,0xff8bd8,0xff7a3d][i];
+    const g=new THREE.Group();
+    const bm=new THREE.MeshLambertMaterial({color:c,transparent:true,opacity:0.95});
+    const b=new THREE.Mesh(new THREE.SphereGeometry(0.34,8,7),bm); b.scale.y=1.15; g.add(b);
+    const sm=new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.7});
+    const s=new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,0.9,3),sm); s.position.y=-0.7; g.add(s);
+    g.position.set(x+rand(-1.6,1.6), y+rand(-0.3,0.5), z+rand(-1.6,1.6));
+    G.add(g); mats.push(bm,sm); B.push({g,vy:rand(1.6,2.7),ph:rand(0,6)});
+  }
+  let t0=0;
+  const anim={update:(dt,t)=>{
+    t0+=dt; const u=t0/2.6;
+    B.forEach(o=>{ o.g.position.y+=o.vy*dt; o.g.position.x+=Math.sin(t*2+o.ph)*0.4*dt; });
+    if(u>0.55) mats.forEach(m=>m.opacity=Math.max(0,(1-u)/0.45)*0.9);
+    if(u>=1){ CITY.scene.remove(G); const i2=CITY.dyn.indexOf(anim); if(i2>=0)CITY.dyn.splice(i2,1); }
+  }};
+  CITY.dyn.push(anim);
+}
 
 /* ============================================================
    SLINGSHOT KIT — drag back, see the live dotted arc, release.
@@ -17894,7 +18572,9 @@ function startZoneShot(kind){
   // stand player at the spot
   cityExitVehicle(true);
   CITY.player.group.position.set(base.x+Math.sin(yaw)*3, 0, base.z+Math.cos(yaw)*3);
-  CITY.look.yaw=yaw+Math.PI; CITY.look.pitch=-0.05;
+  // r24: face the GOAL on start (camera-forward is (-sin,-cos) -> look.yaw must be `yaw`, not yaw+PI)
+  CITY.look.yaw=yaw; CITY.look.pitch=-0.05;
+  CITY.player.group.rotation.y=yaw+Math.PI;
   const act={ shot:0, total:5, right:0, scored:0, phase:"aim", aim:true };
   actStart(act);
   // goal frame + zones
@@ -17926,18 +18606,19 @@ function startZoneShot(kind){
     ball.userData.vel=null;
     if(sling) sling.hide();
     act.phase="aim";
-    actHUD(`${isHockey?"🏒":"⚽"} Shot ${act.shot+1}/${act.total} · ✅ ${act.right} · hold & DRAG back, release to shoot!`);
+    actHUD(`${isHockey?"🏒":"⚽"} Shot ${act.shot+1}/${act.total} · ✅ ${act.right} · ${isHockey?"skate":"dribble"} anywhere — DRAG back & release to shoot!`);
   }
   newShot();
   sling=makeSling(act,{
     can:()=>act.phase==="aim",
     origin:()=>ball.position,
-    yaw0:()=>Math.atan2(gp.x-base.x, gp.z-base.z),
+    // r24: shoot from wherever you stand — aim from the ball's live position, not the fixed spot
+    yaw0:()=>Math.atan2(gp.x-ball.position.x, gp.z-ball.position.z),
     minSp:9, maxSp:isHockey?26:22,
     flat:isHockey, flatVy:0.4,
     gravity:22, loft:0.08, minVy:2, maxVy:12,
     onLaunch:(vel)=>{
-      act.phase="fly";
+      act.phase="fly"; act.flyT=0;
       ball.userData.vel=vel;
       const dive=pick([-1,0,1]);
       goalie.userData.dive=dive; goalie.userData.diveT=0;
@@ -17945,6 +18626,11 @@ function startZoneShot(kind){
     }});
   act.update=(dt,t)=>{
     sling.tick();
+    // r24: the ball/puck FOLLOWS the player while aiming — dribble it anywhere on the rink/pitch
+    if(act.phase==="aim"){
+      const pp=CITY.player.group.position, f=CITY.player.group.rotation.y;
+      ball.position.set(pp.x+Math.sin(f)*0.9, isHockey?0.1:0.36, pp.z+Math.cos(f)*0.9);
+    }
     if(goalie.userData.dive!==undefined && goalie.userData.diveT<1){
       goalie.userData.diveT+=dt*2.4;
       goalie.position.x=gp.x-Math.cos(yaw)*goalie.userData.dive*W*0.3*Math.min(1,goalie.userData.diveT);
@@ -17955,6 +18641,16 @@ function startZoneShot(kind){
       if(!isHockey) v.y-=22*dt;
       ball.position.addScaledVector(v,dt);
       if(isHockey) ball.position.y=0.1;
+      // r24: shots that wander (now that you can shoot from anywhere) time out as a miss
+      act.flyT=(act.flyT||0)+dt;
+      if(act.flyT>2.6){ act.phase="rate"; act.shot++;
+        SND.wrong&&SND.wrong(); cityToast("💨 Way off — square up to the goal and fire!");
+        setTimeout(()=>{ if(CITY.activity!==act) return;
+          if(act.shot>=act.total){ const earn=act.right*14+act.scored*3;
+            actResult(isHockey?"🏒 Slapshot session done!":"⚽ Shootout done!", act.right, act.total, earn,
+              `<div style="font-size:13px;color:#cdd4ff">${act.scored} goals scored</div>`);
+          } else newShot(); }, 700);
+        return; }
       // crossed goal plane?
       const rel=(ball.position.x-gp.x)*-Math.sin(yaw)+(ball.position.z-gp.z)*-Math.cos(yaw);
       if(rel<0){
@@ -17966,7 +18662,8 @@ function startZoneShot(kind){
         const saved=goalie.userData.dive===zi && Math.abs(lat)<W*0.42;
         const correct=inGoal && act.item.answers[zoneI]===act.item.correct;
         if(inGoal&&!saved){ act.scored++;
-          if(correct){ act.right++; cityQuizRight(); SND.correct&&SND.correct(); cityToast("🥅 GOAL + correct! "+act.item.correct); }
+          if(correct){ act.right++; cityQuizRight(); SND.correct&&SND.correct(); cityToast("🥅 GOAL + correct! "+act.item.correct);
+            cityCelebrate(gp.x, H+0.8, gp.z); actPopup(isHockey?"🏒 GOAL! +14 🪙":"⚽ GOAL! +14 🪙","#8ef0b5"); }   // r24 celebrate
           else { SND.tap&&SND.tap(); cityToast("🥅 Goal… but "+cityExplain(act.item), 5200); }
         } else { cityQuizWrong(act.item); SND.wrong&&SND.wrong(); cityToast(saved?"🧤 SAVED by the keeper!":"❌ Off target — "+cityExplain(act.item), 5200); }
         setTimeout(()=>{ if(CITY.activity!==act) return;
@@ -17997,10 +18694,19 @@ function startHoops(){
   actStart(act);
   const ball=new THREE.Mesh(new THREE.SphereGeometry(0.32,10,8), new THREE.MeshLambertMaterial({color:0xff7a3d}));
   act.add(ball);
-  const rimY=3.4, rim={x:hp.x+Math.sin(F.yaw)*(1)*0.7*0+hp.x*0, z:0};
-  const rimPos={x:hp.x, z:hp.z};   // approx ring center
+  // r24: ring center matches the painted rim (offset 0.7 toward the court), not the backboard pole
+  const rimY=3.4;
+  const rimPos={x:hp.x-Math.sin(F.yaw)*0.7, z:hp.z-Math.cos(F.yaw)*0.7};
+  // r24: visible rim + net that REACT on a make (unmistakable made-shot feedback)
+  const rimMat=new THREE.MeshLambertMaterial({color:0xff7a3d,emissive:0xff7a3d,emissiveIntensity:0});
+  const rimRing=new THREE.Mesh(new THREE.TorusGeometry(0.55,0.06,8,18),rimMat);
+  rimRing.rotation.x=Math.PI/2; rimRing.position.set(rimPos.x,rimY,rimPos.z); act.add(rimRing);
+  const netMat=new THREE.MeshLambertMaterial({color:0xffffff,transparent:true,opacity:0.55,side:THREE.DoubleSide});
+  const net=new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.3,0.55,10,1,true),netMat);
+  net.position.set(rimPos.x,rimY-0.35,rimPos.z); act.add(net);
+  act.netT=0;
   let sling=null;
-  function reset(){ ball.position.set(py.x,1.4,py.z); ball.userData.vel=null; if(sling) sling.hide(); act.phase="aim"; }
+  function reset(){ ball.userData.vel=null; if(sling) sling.hide(); act.phase="aim"; }
   reset();
   sling=makeSling(act,{
     can:()=>act.phase==="aim",
@@ -18011,13 +18717,30 @@ function startHoops(){
     onLaunch:(vel)=>{ act.phase="fly"; ball.userData.vel=vel; SND.tap&&SND.tap(); }});
   act.update=(dt,t)=>{
     sling.tick();
-    actHUD(`🏀 Shot ${act.shot+1}/${act.total} · 🎯 ${act.made} made · DRAG back for power & aim, release to shoot`);
+    actHUD(`🏀 Shot ${act.shot+1}/${act.total} · 🎯 ${act.made} made · dribble ANYWHERE, then DRAG back & release to shoot`);
+    // r24: dribble — the ball follows the player, shoot from wherever you stand
+    if(act.phase==="aim"){
+      const f=CITY.player.group.rotation.y;
+      const by=(sling&&sling.dragging)?1.4:0.35+Math.abs(Math.sin(t*5))*0.9;   // steady hold while aiming the arc
+      ball.position.set(py.x+Math.sin(f)*0.55, by, py.z+Math.cos(f)*0.55);
+    }
+    // r24: net/rim reaction decay
+    if(act.netT>0){ act.netT-=dt*1.6;
+      net.scale.y=1+Math.max(0,Math.sin(act.netT*18))*0.4*act.netT;
+      rimMat.emissiveIntensity=Math.max(0,act.netT);
+      if(act.netT<=0){ net.scale.y=1; rimMat.emissiveIntensity=0; } }
     const v=ball.userData.vel;
     if(act.phase==="fly"&&v){
       v.y-=20*dt; ball.position.addScaledVector(v,dt);
       const dx=ball.position.x-rimPos.x, dz=ball.position.z-rimPos.z;
       if(v.y<0 && Math.abs(ball.position.y-rimY)<0.3 && dx*dx+dz*dz<0.55*0.55){
-        act.made++; act.shot++; SND.correct&&SND.correct(); cityToast("🏀 SWISH!");
+        act.made++; act.shot++;
+        // r24: unmistakable MAKE — flash + splash on the hoop, net kick, big popup, sound, celebration
+        act.netT=1;
+        cityPuff(rimPos.x,rimY,rimPos.z,{n:12,color:0xffd75c,size:0.3,spread:0.6,up:2.4,life:0.8,gravity:1.6,additive:true});
+        actPopup("SWISH! +8 🪙","#8ef0b5");
+        cityCelebrate(rimPos.x,rimY+0.6,rimPos.z);
+        SND.correct&&SND.correct(); cityToast("🏀 SWISH!");
         cityEmit("shots",{made:1});
         finishOrNext();
       } else if(ball.position.y<0.2){
@@ -18054,26 +18777,37 @@ function startHoops(){
 }
 
 /* ============================================================
-   D) HOME-RUN DERBY (timing + answer banners)
+   D) HOME-RUN DERBY
+   r24: full flow rebuild — question up → 7s THINK countdown → the pitch →
+   AIM your swing at the field zone (left/center/right = the answers) → swing.
+   Batter keeps the batter's box (that's baseball); a real bat is in hand.
    ============================================================ */
 function startDerby(){
   const F=districtFrame(DISTRICT_BY_KEY.sports);
   const home=SPOTS.derby;
   cityExitVehicle(true);
   CITY.player.group.position.set(home.x,0,home.z);
-  const outYaw=F.yaw+Math.PI;    // hit away from plaza
-  CITY.look.yaw=outYaw; CITY.look.pitch=0.1;
-  const act={ pitch:0, total:8, right:0, hits:0, phase:"wait", t:0, aim:true };
+  const faceYaw=F.yaw+Math.PI;            // faces the mound & outfield banners
+  CITY.look.yaw=faceYaw; CITY.look.pitch=0.1;
+  CITY.player.group.rotation.y=F.yaw;
+  const act={ pitch:0, total:8, right:0, hits:0, phase:"think", think:7, t:0, aim:true };
   actStart(act);
   const ball=new THREE.Mesh(new THREE.SphereGeometry(0.26,9,7), new THREE.MeshLambertMaterial({color:0xffffff}));
   act.add(ball);
+  // r24: a visible BAT in hand — rests on the shoulder, sweeps on swing
+  const bat=new THREE.Group();
+  const handle=new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.055,0.5,6),new THREE.MeshLambertMaterial({color:0x3a3f55}));
+  handle.rotation.z=Math.PI/2; handle.position.x=0.28; bat.add(handle);
+  const barrel=new THREE.Mesh(new THREE.CylinderGeometry(0.095,0.06,0.85,7),new THREE.MeshLambertMaterial({color:0xb8905a}));
+  barrel.rotation.z=Math.PI/2; barrel.position.x=0.92; bat.add(barrel);
+  act.add(bat); act.swing=null;
   // faint dots tracing the pitch path so the timing is readable
   const pitchDots=[];
   for(let i=0;i<10;i++){ const m=new THREE.Mesh(new THREE.SphereGeometry(0.1,5,4),
     new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.45-i*0.035}));
     m.visible=false; act.add(m); pitchDots.push(m); }
   const mound={x:home.x-Math.sin(F.yaw)*(-14), z:home.z-Math.cos(F.yaw)*(-14)};
-  // three banners in the outfield: left / center / right
+  // three banners in the outfield: left / center / right — these ARE the answers
   const banners=[];
   const board=actBoard(home.x-Math.sin(F.yaw)*(-30), 10, home.z-Math.cos(F.yaw)*(-30), F.yaw+Math.PI); act.add(board);
   function newPitch(){
@@ -18088,31 +18822,61 @@ function startDerby(){
       g.position.set(bx,0,bz); g.rotation.y=F.yaw+Math.PI;
       CITY.scene.add(g); banners.push(g); act._cleanup.push(g);
     });
-    ball.position.set(mound.x,1.4,mound.z); ball.userData.vel=null; act.phase="pitch"; act.t=0; act._early=false;
-    setTimeout(()=>{ if(CITY.activity===act&&act.phase==="pitch"){
-      const dx=home.x-mound.x, dz=home.z-mound.z, dd=Math.hypot(dx,dz);
-      ball.userData.vel=new THREE.Vector3(dx/dd*9.5,0,dz/dd*9.5); act.phase="incoming"; } }, rand(600,1400));
+    // step 1: THINK — ball waits at the mound while a visible countdown runs
+    ball.position.set(mound.x,1.4,mound.z); ball.userData.vel=null;
+    act.phase="think"; act.think=7; act._early=false;
   }
   newPitch();
+  // r24: which zone is the batter AIMING at? (camera look picks left/center/right)
+  function aimLane(){
+    let d=(CITY.look.yaw+Math.PI)-F.yaw;
+    while(d>Math.PI)d-=Math.PI*2; while(d<-Math.PI)d+=Math.PI*2;
+    return d<-0.28?0:(d>0.28?2:1);
+  }
   act.on("click",()=>{
+    if(act.phase==="think"){ cityToast("🧠 think first — the pitch is coming!"); return; }
     if(act.phase!=="incoming") return;
+    act.swing=0;                           // swing the bat on every attempt
     const dd=Math.hypot(ball.position.x-home.x, ball.position.z-home.z);
-    if(dd>6.5){ if(!act._early){ act._early=true; cityToast("⚾ wait for it…"); } return; }
+    if(dd>6.5){ if(!act._early){ act._early=true; cityToast("⚾ swing when it reaches the plate!"); } return; }
     act.phase="hit"; act.pitch++;
-    // timing → direction: perfect(≤1.2) center, early(ball far) right→ actually early = ball still before plate → hit to the side
-    const timing=clamp((dd-0.4)/3.6,0,1);   // 0 = perfect late contact, 1 = early
-    const lane=timing<0.33?1:(timing<0.66?0:-1)*1;   // wait: perfect->center… map below
-    const laneI=timing<0.33?1:(timing<0.66?2:0);     // slight jumble keeps it lively: late=center, mid=right, early=left
-    const target=banners[laneI];
-    const tp=target.position;
+    // r24: the swing goes WHERE you aim — the ball flies to the zone you're looking at
+    const laneI=aimLane();
+    const tp=banners[laneI].position;
     const dir=new THREE.Vector3(tp.x-ball.position.x, 0, tp.z-ball.position.z).normalize();
     ball.userData.vel=new THREE.Vector3(dir.x*22, 11, dir.z*22);
-    act.hits++;
-    act.hitLane=laneI;
+    act.hits++; act.hitLane=laneI;
     SND.boost?SND.boost():SND.tap&&SND.tap();
   });
   act.update=(dt,t)=>{
-    actHUD(`⚾ Pitch ${Math.min(act.pitch+1,act.total)}/${act.total} · ✅ ${act.right} · CLICK when the ball reaches you`);
+    // bat pose: rest on shoulder / sweep on swing
+    const pp=CITY.player.group.position, f=CITY.player.group.rotation.y;
+    bat.position.set(pp.x,1.25,pp.z);
+    if(act.swing!==null){
+      act.swing+=dt*4.5; const u=Math.min(1,act.swing);
+      bat.rotation.y=f+2.6-3.4*u; bat.rotation.z=0.9-0.8*u;
+      if(act.swing>1.6) act.swing=null;
+    } else { bat.rotation.y=f+2.6; bat.rotation.z=0.9; }
+    // phase machine
+    if(act.phase==="think"){
+      act.think-=dt;
+      actHUD(`⚾ Pitch ${Math.min(act.pitch+1,act.total)}/${act.total} · 🧠 THINK: ${Math.max(0,Math.ceil(act.think))}s · the answers stand in the field!`);
+      if(act.think<=0){ act.phase="windup"; act.wind=0.6; cityToast("⚾ Here comes the pitch!"); }
+      return;
+    }
+    if(act.phase==="windup"){
+      act.wind-=dt;
+      if(act.wind<=0){
+        const dx=home.x-mound.x, dz=home.z-mound.z, dd=Math.hypot(dx,dz);
+        ball.userData.vel=new THREE.Vector3(dx/dd*9.5,0,dz/dd*9.5); act.phase="incoming";
+      }
+      return;
+    }
+    if(act.phase==="incoming"){
+      const li=aimLane();
+      const lanes=["◀ "+act.item.answers[0], "▲ "+act.item.answers[1], act.item.answers[2]+" ▶"];
+      actHUD(`⚾ AIM with the camera → <b>${lanes[li]}</b> · CLICK to swing!`);
+    } else actHUD(`⚾ Pitch ${Math.min(act.pitch+1,act.total)}/${act.total} · ✅ ${act.right}`);
     const v=ball.userData.vel;
     if(act.phase==="incoming"&&v){ pitchDots.forEach((m,i)=>{ m.visible=true;
       m.position.copy(ball.position).addScaledVector(v,(i+1)*0.12); }); }
@@ -18122,12 +18886,15 @@ function startDerby(){
       ball.position.addScaledVector(v,dt);
       if(act.phase==="incoming"){
         const dd=Math.hypot(ball.position.x-home.x, ball.position.z-home.z);
-        if(dd<0.4){ act.phase="miss"; act.pitch++; SND.wrong&&SND.wrong(); cityToast("⚾ swing and a miss!");
+        if(dd<0.4){ act.phase="miss"; act.pitch++; SND.wrong&&SND.wrong(); cityToast("⚾ it zipped past — swing sooner!");
           setTimeout(()=>next(), 700); }
       } else if(act.phase==="hit" && ball.position.y<0.2){
         const correct=act.item.answers[act.hitLane]===act.item.correct;
-        if(correct){ act.right++; cityQuizRight(); SND.correct&&SND.correct(); cityToast("💥 HOME RUN into "+act.item.correct+"!"); }
-        else cityToast("💥 Big hit — but "+cityExplain(act.item), 5200);
+        if(correct){ act.right++; cityQuizRight(); SND.correct&&SND.correct();
+          cityToast("💥 HOME RUN into "+act.item.correct+"!");
+          actPopup("💥 HOME RUN!","#8ef0b5");                                   // r24
+          cityCelebrate(ball.position.x, 3, ball.position.z); }                 // r24
+        else { cityQuizWrong(act.item); cityToast("💥 Big hit — but "+cityExplain(act.item), 5200); }
         act.phase="done"; setTimeout(()=>next(), 800);
       }
     }
@@ -18169,7 +18936,9 @@ function startAimTrio(kind){
       } else {
         const ring=new THREE.Mesh(new THREE.TorusGeometry(1.5,0.18,8,18),new THREE.MeshLambertMaterial({color:0xffd75c}));
         g.add(ring);
-        g.position.set(tx,3.4+(i===1?1.4:0),tz);
+        // r24: middle ring raised to 3.4+3.8 so the goalpost upright/crossbar (tops at y6)
+        // no longer hides the MIDDLE answer — all three labels fully readable
+        g.position.set(tx,3.4+(i===1?3.8:0),tz);
         g.userData.bobPh=i;
       }
       const lab=ansSprite(act.item.answers[i]); lab.position.y=isArch?-1.5:2.6; g.add(lab);
@@ -18180,10 +18949,17 @@ function startAimTrio(kind){
   }
   newRound();
   let proj=null, projVel=null, projDist=0;
+  // r24: the ball/bow is CARRIED — walk anywhere, throw/shoot from where you stand
+  const pp=CITY.player.group.position;
+  const carry=isArch
+    ? new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.035,0.95,5),new THREE.MeshLambertMaterial({color:0x8a6a45}))
+    : new THREE.Mesh(new THREE.SphereGeometry(0.26,8,6),new THREE.MeshLambertMaterial({color:0x8a4a2a}));
+  if(!isArch) carry.scale.z=1.5;
+  act.add(carry);
   const sling=makeSling(act,{
     can:()=>act.targets.length>0 && !proj,
-    origin:()=>new THREE.Vector3(base.x, 1.6, base.z),
-    yaw0:()=>F.yaw,
+    origin:()=>new THREE.Vector3(pp.x, 1.6, pp.z),                       // r24: live player position
+    yaw0:()=>act.targets[1]? Math.atan2(act.targets[1].position.x-pp.x, act.targets[1].position.z-pp.z) : F.yaw,
     minSp:8, maxSp:isArch?27:20,
     gravity:isArch?7:16, loft:isArch?0.05:0.07,
     minVy:isArch?0.5:1.5, maxVy:isArch?6:10,
@@ -18192,7 +18968,7 @@ function startAimTrio(kind){
         ? new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.035,0.95,5),new THREE.MeshLambertMaterial({color:0x8a6a45}))
         : new THREE.Mesh(new THREE.SphereGeometry(0.26,8,6),new THREE.MeshLambertMaterial({color:0x8a4a2a}));
       if(!isArch) proj.scale.z=1.5;
-      proj.position.set(base.x,1.6,base.z);
+      proj.position.set(pp.x,1.6,pp.z);                                  // r24: launch from where you stand
       act.add(proj);
       projVel=vel.clone(); projDist=0;
       SND.tap&&SND.tap();
@@ -18201,7 +18977,11 @@ function startAimTrio(kind){
     if(proj){ CITY.scene.remove(proj); proj=null; }
     sling.hide();
     act.shot++;
-    if(bi>=0 && act.item.answers[bi]===act.item.correct){ act.right++; cityQuizRight(); SND.correct&&SND.correct(); cityToast("🎯 "+act.item.correct+"!"); }
+    if(bi>=0 && act.item.answers[bi]===act.item.correct){ act.right++; cityQuizRight(); SND.correct&&SND.correct(); cityToast("🎯 "+act.item.correct+"!");
+      const tp=act.targets[bi].position;
+      actPopup(isArch?"🎯 BULLSEYE! +12 🪙":"🏈 RING SHOT! +12 🪙","#8ef0b5");   // r24
+      cityCelebrate(tp.x,tp.y+0.8,tp.z); }                                        // r24
+
     else if(bi>=0){ cityQuizWrong(act.item); SND.wrong&&SND.wrong(); cityToast("❌ "+cityExplain(act.item), 5200); }
     else { SND.wrong&&SND.wrong(); cityToast("💨 missed — watch the arc and adjust!"); }
     if(act.shot>=act.total){
@@ -18212,7 +18992,12 @@ function startAimTrio(kind){
   }
   act.update=(dt,t)=>{
     sling.tick();
-    act.targets.forEach((g,i)=>{ if(g.userData.bobPh!==undefined) g.position.y=3.4+(i===1?1.4:0)+Math.sin(t*1.4+g.userData.bobPh*2)*0.5; });
+    // r24: carried ball/arrow follows the player while not in flight
+    carry.visible=!proj;
+    if(!proj){ const f=CITY.player.group.rotation.y;
+      carry.position.set(pp.x+Math.sin(f)*0.45, 1.35, pp.z+Math.cos(f)*0.45);
+      if(isArch) carry.rotation.z=Math.PI/2.4; }
+    act.targets.forEach((g,i)=>{ if(g.userData.bobPh!==undefined) g.position.y=3.4+(i===1?3.8:0)+Math.sin(t*1.4+g.userData.bobPh*2)*0.5; });   // r24: keep raised middle
     if(proj&&projVel){
       // substep so fast shots can't tunnel through a target between frames
       const steps=3, sdt=dt/steps;
@@ -18223,7 +19008,7 @@ function startAimTrio(kind){
         for(let i=0;i<act.targets.length;i++){
           if(proj.position.distanceTo(act.targets[i].position)<(isArch?1.5:1.9)) return resolveShot(i);
         }
-        if(proj.position.y<0.05||projDist>45) return resolveShot(-1);
+        if(proj.position.y<0.05||projDist>60) return resolveShot(-1);   // r24: longer reach — you can now shoot from farther back
       }
       if(isArch){ const q=new THREE.Vector3().copy(projVel).normalize();
         proj.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), q); }
@@ -18449,19 +19234,30 @@ function wirePhotoSafari(){
     if(!best){ cityToast("📷 …just scenery. Get closer to an animal!"); return; }
     if(spd>7.5){ cityToast("📷 Too fast! Walk (no Shift) so you don't blur the shot."); return; }
     if(CSAVE.photos.indexOf(best.id)>=0){ cityToast("📷 Already in your collection — find the others! ("+CSAVE.photos.length+"/6)"); return; }
-    CSAVE.photos.push(best.id); citySave();
-    addCoins(8,"activity"); cityEmit("photo",{id:best.id,total:CSAVE.photos.length});
-    SND.correct&&SND.correct();
-    const facts={deer:"Deer can rotate their ears 180° without moving their head.",
-      fox:"A fox's tail is called a brush — it doubles as a blanket.",
-      owl:"Owls can't move their eyes — that's why they turn their heads.",
-      rabbit:"Rabbits binky — a twisting happy-jump — when they're excited.",
-      bear:"Black bears can sprint 30 mph. Never race a bear.",
-      raccoon:"Raccoons 'wash' food to feel it better — their paws get MORE sensitive wet."};
-    cityModal("📸 "+best.ico+" Captured: "+best.id+"!", CSAVE.photos.length+"/6 wildlife photographed · +8 🪙",
-      `<p style="font-size:14.5px;line-height:1.6;background:rgba(255,255,255,.05);border-radius:12px;padding:12px">${facts[best.id]||""}</p>
-       ${CSAVE.photos.length>=6?'<div style="text-align:center;font-weight:900;color:#ffcf5c;font-size:16px;margin-top:8px">🏆 FULL ALBUM! +50 bonus coins</div>':""}`);
-    if(CSAVE.photos.length>=6) addCoins(50,"activity");
+    // r24: coins only from thinking — DEVELOP the photo by answering a question
+    const it=cityDrawItem();
+    const m=cityModal("📷 Develop the photo of the "+best.id,"answer right and it develops into your album",
+      `<div style="text-align:center;font-size:18px;font-weight:900;background:rgba(255,255,255,.06);border-radius:12px;padding:13px;margin-bottom:10px">${it.prompt}: <span style="color:#9ef0ff">${it.target}</span></div>
+       <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">${it.answers.map(a=>`<button class="cbtn ghost phq" data-a="${a}" style="font-size:15px">${a}</button>`).join("")}</div>`);
+    m.querySelectorAll(".phq").forEach(b=>b.onclick=()=>{
+      const ok=b.getAttribute("data-a")===it.correct;
+      cityCloseMenu(true);
+      if(!ok){ cityWrongModal(it, ()=>cityToast("📷 The photo came out blurry — sneak up and snap it again!")); return; }
+      cityQuizRight();
+      CSAVE.photos.push(best.id); citySave();
+      addCoins(8,"activity"); cityEmit("photo",{id:best.id,total:CSAVE.photos.length});
+      SND.correct&&SND.correct();
+      const facts={deer:"Deer can rotate their ears 180° without moving their head.",
+        fox:"A fox's tail is called a brush — it doubles as a blanket.",
+        owl:"Owls can't move their eyes — that's why they turn their heads.",
+        rabbit:"Rabbits binky — a twisting happy-jump — when they're excited.",
+        bear:"Black bears can sprint 30 mph. Never race a bear.",
+        raccoon:"Raccoons 'wash' food to feel it better — their paws get MORE sensitive wet."};
+      cityModal("📸 "+best.ico+" Captured: "+best.id+"!", CSAVE.photos.length+"/6 wildlife photographed · +8 🪙",
+        `<p style="font-size:14.5px;line-height:1.6;background:rgba(255,255,255,.05);border-radius:12px;padding:12px">${facts[best.id]||""}</p>
+         ${CSAVE.photos.length>=6?'<div style="text-align:center;font-weight:900;color:#ffcf5c;font-size:16px;margin-top:8px">🏆 FULL ALBUM! +50 bonus coins</div>':""}`);
+      if(CSAVE.photos.length>=6) addCoins(50,"activity");
+    });
   });
 }
 
@@ -18570,7 +19366,8 @@ function startRunway(){
   const F=districtFrame(d);
   cityExitVehicle(true);
   const startP=F.L(0,-1);
-  CITY.player.group.position.set(startP.x,0,startP.z);
+  // r24: the catwalk deck TOP is y=0.9 (box 0.9 tall) — start ON it, not inside it
+  CITY.player.group.position.set(startP.x,0.9,startP.z);
   CITY.look.yaw=F.yaw+Math.PI; CITY.look.pitch=-0.04;
   const act={ ck:0, total:3, right:0 };
   actStart(act);
@@ -18608,9 +19405,15 @@ function startRunway(){
     actHUD(`👗 Style gate ${act.ck+1}/${act.total} · ✅ ${act.right} · strut through the answer you trust!`);
     const p=CITY.player.group.position;
     // project onto runway axis: local z
-    const rel=(p.x-d.x)*Math.cos(-F.yaw)+(p.z-d.z)*Math.sin(-F.yaw); // local x
     const lx=(p.x-d.x)*Math.cos(-F.yaw)+(p.z-d.z)*Math.sin(-F.yaw);
     const lzP=-(p.x-d.x)*Math.sin(-F.yaw)+(p.z-d.z)*Math.cos(-F.yaw);
+    // r24: walk ON the catwalk surface — deck (6 wide, local z -35..7) top y=0.9,
+    // end stage (10 wide, local z ≈ -33..-43) top y=1.1. Runs after the physics step,
+    // so it lifts the walker onto the deck instead of leaving them inside the mesh.
+    let deckY=null;
+    if(Math.abs(lx)<=3.3 && lzP>=-35.4 && lzP<=7.4) deckY=0.9;
+    if(Math.abs(lx)<=5.3 && lzP>=-43.4 && lzP<-35.4) deckY=1.1;
+    if(deckY!==null && p.y<deckY){ p.y=deckY; CITY.player.vel.y=0; CITY.player.grounded=true; }
     if(lzP < ckDists[act.ck]+0.3){
       const laneI=lx<-1.05?0:(lx>1.05?2:1);
       const okAns=act.lanes[laneI]===act.item.correct;
@@ -18649,30 +19452,235 @@ function cityBuildActivities(){
   P(SPOTS.paintmix,{r:4.4,icon:"🎨",label:"Paint Studio — mix colors by the numbers",
     action:()=>enterInterior("paint",{name:"the Paint Studio",ret:{x:SPOTS.paintmix.x,z:SPOTS.paintmix.z+2,yaw:Math.PI}})});
   P(SPOTS.craft,{r:4,icon:"🖍️",label:"Craft Corner — Coloring Studio!",
-    action:()=>openColoring()});
+    action:()=>openColoringGated()});   // r24: learning layer for the painting game
   if(DISTRICT_BY_KEY.zoo) wireZooFeeding();
   if(DISTRICT_BY_KEY.wild){ wirePhotoSafari(); }
   if(DISTRICT_BY_KEY.space) wireMarsRocks();
   if(DISTRICT_BY_KEY.farm) wireFarm();
+  // r24 (12): the Design Lab fabric game confused playtesters — wrap the interior
+  // entry (defined in 03y-interiors.js) to add clear instructions + a guided first step
+  if(typeof enterInterior==="function" && !enterInterior._r24){
+    const _ei=enterInterior;
+    enterInterior=function(type,door){
+      _ei(type,door);
+      if(type==="design") designLabGuide();
+      if(type==="barn") setTimeout(()=>cityToast("🌾 Read the trough board, then press E at a feed box to scoop — hit the amount EXACTLY!",5200),600);
+    };
+    enterInterior._r24=true;
+  }
 }
-/* farm life: egg collecting + horse petting */
+/* r24 (11): Art District painting had "no learning aspect, just clicking colors" —
+   now MOST starter colors are question-locked (07x's palette already asks a question
+   per locked color) and the studio door itself is a quick brain check-in. */
+function openColoringGated(){
+  // move blue+yellow from the free palette into the question-locked pool (red stays free)
+  try{
+    if(typeof COLOR_FREE!=="undefined" && COLOR_FREE.length>1){
+      while(COLOR_FREE.length>1){ const c=COLOR_FREE.pop(); if(COLOR_LOCKED.indexOf(c)<0) COLOR_LOCKED.unshift(c); }
+    }
+  }catch(e){}
+  const it=cityDrawItem();
+  const m=cityModal("🖍️ Studio pass","one quick think to open the studio — then every color is earned by answering!",
+    `<div style="text-align:center;font-size:18px;font-weight:900;background:rgba(255,255,255,.06);border-radius:12px;padding:13px;margin-bottom:10px">${it.prompt}: <span style="color:#9ef0ff">${it.target}</span></div>
+     <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">${it.answers.map(a=>`<button class="cbtn ghost sgq" data-a="${a}" style="font-size:15px">${a}</button>`).join("")}</div>`);
+  m.querySelectorAll(".sgq").forEach(b=>b.onclick=()=>{
+    const ok=b.getAttribute("data-a")===it.correct;
+    cityCloseMenu(true);
+    if(ok){ cityQuizRight(); SND.correct&&SND.correct(); openColoring(); }
+    else cityWrongModal(it, ()=>cityToast("🖍️ Almost — press E to try the studio pass again!"));
+  });
+}
+/* r24 (12): 2-line how-to + guided first action for the Design Lab fabric game */
+function designLabGuide(){
+  setTimeout(()=>{
+    const m=cityModal("✂️ Design Lab — how it works","fabric math in 2 steps",
+      `<div style="font-size:15.5px;line-height:2;text-align:center;font-weight:800">
+         <b>1.</b> Read the RECIPE on the glowing board — it asks for exact yards of fabric.<br>
+         <b>2.</b> Walk to a fabric bolt and press <b>E</b> to cut — land EXACTLY on the number!</div>
+       <div style="font-size:12.5px;color:#9aa3d0;text-align:center;margin-top:8px">going over resets the mannequin · the 🪣 bucket restarts a mix · perfect mixes = a REAL outfit</div>
+       <div style="text-align:center;margin-top:10px"><button class="cbtn" id="dl-go">Show me the first bolt ▶</button></div>`,{id:"dlguide"});
+    m.querySelector("#dl-go").onclick=()=>{
+      cityCloseMenu(true);
+      // guided first action: a bouncing marker over the first fabric bolt until the first cut
+      const o=ZONES.interior.origin;
+      const arrow=makeTextSprite("⬇ START HERE — press E",{px:36,scale:0.011});
+      arrow.position.set(o[0]-5.4, 3.4, o[1]-7);
+      if(CITY.world.interiorGroup) CITY.world.interiorGroup.add(arrow); else CITY.scene.add(arrow);
+      let hinted=false;
+      const watch={update:(dt,t)=>{
+        arrow.position.y=3.4+Math.sin(t*3)*0.3;
+        const a=CITY.activity;
+        const done=!a || CITY.zone!=="interior";
+        if(a && a.scoops>0 && !hinted){ hinted=true; cityToast("✂️ Nice cut! Watch the counter — stop EXACTLY on the target."); }
+        if(done || (a&&a.scoops>0&&hinted)){
+          arrow.parent&&arrow.parent.remove(arrow);
+          const i2=CITY.dyn.indexOf(watch); if(i2>=0)CITY.dyn.splice(i2,1);
+        }
+      }};
+      CITY.dyn.push(watch);
+      cityToast("✂️ Step 1: walk to the glowing bolt and press E!");
+    };
+  },400);
+}
+/* farm life: egg collecting + horse petting + Feed Run
+   r24 (9): the farm beams looked live but died silently — egg beams went dead
+   (cond turned false after the daily collect, so E stopped responding under a
+   still-glowing beacon) and there was NO actual farm game to launch. Now every
+   beam always responds, and a new Feed Run beam launches a real scooping game. */
 function wireFarm(){
   const I=CITY.interactables;
   (CITY.world.eggs||[]).forEach((egg,i)=>{
-    const today=new Date().toDateString();
-    I.push({x:egg.x,z:egg.z,r:2.2,icon:"🥚",label:"Collect the egg",
-      cond:()=>!egg.got && ((CSAVE.chests||{})["egg"+i])!==today,
-      action:()=>{ egg.got=true; egg.mesh.visible=false;
-        CSAVE.chests=CSAVE.chests||{}; CSAVE.chests["egg"+i]=today; citySave();
-        addCoins(4,"farm"); SND.correct&&SND.correct(); cityToast("🥚 +4 coins — fresh from the coop!"); }});
+    I.push({x:egg.x,z:egg.z,r:2.8,icon:"🥚",label:"Collect the egg — crack the question!",
+      cond:()=>!egg.got,
+      action:()=>{
+        const today=new Date().toDateString(); CSAVE.chests=CSAVE.chests||{};
+        if(CSAVE.chests["egg"+i]===today){ cityToast("🥚 This nest restocks tomorrow — check the other beams!"); return; }
+        // r24 (13): coins only from thinking — an egg takes a question to collect
+        const it=cityDrawItem();
+        const m=cityModal("🥚 Egg hunt!","answer to collect it",
+          `<div style="text-align:center;font-size:18px;font-weight:900;background:rgba(255,255,255,.06);border-radius:12px;padding:13px;margin-bottom:10px">${it.prompt}: <span style="color:#9ef0ff">${it.target}</span></div>
+           <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">${it.answers.map(a=>`<button class="cbtn ghost eq" data-a="${a}" style="font-size:15px">${a}</button>`).join("")}</div>`);
+        m.querySelectorAll(".eq").forEach(b=>b.onclick=()=>{
+          const ok=b.getAttribute("data-a")===it.correct;
+          cityCloseMenu(true);
+          if(ok){ egg.got=true; egg.mesh.visible=false; CSAVE.chests["egg"+i]=today; citySave();
+            cityQuizRight(); addCoins(6,"farm"); SND.correct&&SND.correct(); cityToast("🥚 +6 coins — fresh from the coop!"); }
+          else cityWrongModal(it);
+        });
+      }});
   });
   if(SPOTS.paddock) I.push({x:SPOTS.paddock.x,z:SPOTS.paddock.z,r:5,icon:"🐴",label:"Pet the horses",
     action:()=>{ const today=new Date().toDateString(); CSAVE.chests=CSAVE.chests||{};
       const first=CSAVE.chests.petHorse!==today;
-      if(first){ CSAVE.chests.petHorse=today; citySave(); addCoins(6,"farm"); }
-      SND.correct&&SND.correct();
-      cityToast("🐴 The horses nuzzle you"+(first?" — +6 coins!":" happily. 💕"));
+      if(!first){ SND.correct&&SND.correct(); cityToast("🐴 The horses nuzzle you happily. 💕"); return; }
+      // r24 (13): first daily treat bonus is question-gated
+      const it=cityDrawItem();
+      const m=cityModal("🐴 Treat time!","answer right and the horses get their treat (+6 🪙)",
+        `<div style="text-align:center;font-size:18px;font-weight:900;background:rgba(255,255,255,.06);border-radius:12px;padding:13px;margin-bottom:10px">${it.prompt}: <span style="color:#9ef0ff">${it.target}</span></div>
+         <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">${it.answers.map(a=>`<button class="cbtn ghost hq" data-a="${a}" style="font-size:15px">${a}</button>`).join("")}</div>`);
+      m.querySelectorAll(".hq").forEach(b=>b.onclick=()=>{
+        const ok=b.getAttribute("data-a")===it.correct;
+        cityCloseMenu(true);
+        if(ok){ CSAVE.chests.petHorse=today; citySave(); addCoins(6,"farm");
+          cityQuizRight(); SND.correct&&SND.correct(); cityToast("🐴 Nuzzles all around — +6 coins!"); }
+        else cityWrongModal(it, ()=>cityToast("🐴 The horses wait patiently — try again!"));
+      });
     }});
+  // r24 (9+10): Feed Run — a real farm game beam by the veggie garden
+  const fd=DISTRICT_BY_KEY.farm;
+  if(fd){ const Ff=districtFrame(fd); const spot=Ff.L(10,26);
+    I.push({x:spot.x,z:spot.z,r:4.4,icon:"🌾",label:"Feed Run — scoop feed, serve the RIGHT trough!",
+      cond:()=>!CITY.activity,
+      action:()=>startFarmFeed()});
+  }
+}
+
+/* ============================================================
+   r24 (10): FEED RUN — the farm scooping game, now functional AND a
+   learning moment: grab a scoop of feed (E), carry it to the trough
+   labeled with the correct answer, dump it (E). Wrong trough = the
+   animals refuse and the study card explains.
+   ============================================================ */
+function startFarmFeed(){
+  const d=DISTRICT_BY_KEY.farm; if(!d) return;
+  const F=districtFrame(d);
+  cityExitVehicle(true);
+  const sp=F.L(10,27);
+  CITY.player.group.position.set(sp.x,0,sp.z);
+  CITY.look.yaw=F.yaw+Math.PI; CITY.look.pitch=0;      // face the troughs & board
+  const act={ round:0, total:3, right:0, carrying:false, allowInteract:true };
+  actStart(act);
+  const board=actBoard(...(()=>{const p=F.L(10,36);return [p.x,7,p.z];})(), F.yaw+Math.PI); act.add(board);
+  // feed sack
+  const sackP=F.L(18,26);
+  const sack=new THREE.Group();
+  const sB=new THREE.Mesh(new THREE.CylinderGeometry(0.7,0.85,1.5,9),new THREE.MeshLambertMaterial({color:0xb8905a}));
+  sB.position.y=0.75; sack.add(sB);
+  const sTop=new THREE.Mesh(new THREE.SphereGeometry(0.62,8,6),new THREE.MeshLambertMaterial({color:0xd8b860}));
+  sTop.position.y=1.5; sTop.scale.y=0.5; sack.add(sTop);
+  sack.position.set(sackP.x,0,sackP.z); act.add(sack);
+  const sackLab=makeTextSprite("🌾 FEED SACK — press E to scoop",{px:32,scale:0.01});
+  sackLab.position.set(sackP.x,3,sackP.z); act.add(sackLab);
+  // the carried scoop (follows the player)
+  const scoopM=new THREE.Mesh(new THREE.SphereGeometry(0.3,8,6),new THREE.MeshLambertMaterial({color:0xd8b860}));
+  scoopM.visible=false; act.add(scoopM);
+  // three troughs + hungry animals behind them
+  const troughs=[];
+  [-1,0,1].forEach((s,i)=>{
+    const tp=F.L(2+ (s+1)*8, 31);            // local x 2 / 10 / 18, z 31
+    const g=new THREE.Group();
+    const tub=new THREE.Mesh(new THREE.BoxGeometry(2.6,0.7,1.1),new THREE.MeshLambertMaterial({color:0x8a6a45}));
+    tub.position.y=0.35; g.add(tub);
+    const feed=new THREE.Mesh(new THREE.BoxGeometry(2.2,0.16,0.8),new THREE.MeshLambertMaterial({color:0xd8b860}));
+    feed.position.y=0.45; g.add(feed); g.userData.feed=feed;
+    // a little sheep waiting behind the trough
+    const an=new THREE.Group();
+    const ab=new THREE.Mesh(new THREE.SphereGeometry(0.5,8,6),new THREE.MeshLambertMaterial({color:0xf0f0f0})); ab.position.y=0.7; ab.scale.z=1.25; an.add(ab);
+    const ah=new THREE.Mesh(new THREE.SphereGeometry(0.24,7,5),new THREE.MeshLambertMaterial({color:0x2a2018})); ah.position.set(0,0.95,0.62); an.add(ah);
+    an.position.set(0,0,1.3); g.add(an); g.userData.animal=an;
+    g.position.set(tp.x,0,tp.z); g.rotation.y=F.yaw+Math.PI;
+    CITY.scene.add(g); act._cleanup.push(g);
+    troughs.push({g,i});
+  });
+  let labs=[];
+  function newRound(){
+    act.item=cityDrawItem(); boardAsk(board,act.item);
+    labs.forEach(l=>CITY.scene.remove(l)); labs=[];
+    troughs.forEach((tr,i)=>{
+      const lab=ansSprite(act.item.answers[i]);
+      lab.position.copy(tr.g.position); lab.position.y=2.2;
+      CITY.scene.add(lab); labs.push(lab); act._cleanup.push(lab);
+      tr.g.userData.feed.scale.set(1,1,1);
+    });
+    act.carrying=false; scoopM.visible=false;
+  }
+  newRound();
+  // temp interactables (E works mid-activity via allowInteract)
+  const tempInts=[];
+  const TI=(o)=>{ o._ff=true; o.cond=()=>CITY.activity===act; CITY.interactables.push(o); tempInts.push(o); };
+  TI({x:sackP.x,z:sackP.z,r:2.6,icon:"🌾",label:"Scoop a load of feed",
+    action:()=>{
+      if(act.carrying){ cityToast("🌾 You're already carrying feed — serve a trough!"); return; }
+      act.carrying=true; scoopM.visible=true; SND.tap&&SND.tap();
+      cityToast("🌾 Got it! Dump it in the trough with the RIGHT answer (E)");
+    }});
+  troughs.forEach((tr,i)=>{
+    TI({x:tr.g.position.x,z:tr.g.position.z,r:2.4,icon:"🪣",label:"Dump the feed here",
+      action:()=>{
+        if(!act.carrying){ cityToast("🌾 Grab feed from the sack first (E)!"); return; }
+        act.carrying=false; scoopM.visible=false;
+        if(act.item.answers[i]===act.item.correct){
+          act.right++; act.round++;
+          cityQuizRight(); SND.correct&&SND.correct();
+          tr.g.userData.feed.scale.set(1,3.2,1);
+          tr.g.userData.bounce=1;
+          cityCelebrate(tr.g.position.x,1.4,tr.g.position.z);          // r24 (7)
+          actPopup("🐑 NOM NOM! +14 🪙","#8ef0b5");
+          if(act.round>=act.total){
+            setTimeout(()=>{ if(CITY.activity===act) actResult("🌾 Feed Run done!", act.right, act.total, act.right*14,
+              `<div style="font-size:13px;color:#cdd4ff">every belly full — great serving!</div>`); },700);
+          } else setTimeout(()=>{ if(CITY.activity===act) newRound(); },700);
+        } else {
+          tr.g.userData.shake=1;
+          SND.wrong&&SND.wrong();
+          cityToast("🐑 Baa! The animals sniff it… and REFUSE.");
+          cityWrongModal(act.item, ()=>{ if(CITY.activity===act) newRound(); });
+        }
+      }});
+  });
+  act.cleanup=()=>{ CITY.interactables=CITY.interactables.filter(o=>!o._ff); };
+  act.update=(dt,t)=>{
+    actHUD(`🌾 Feed Run ${act.round+1>act.total?act.total:act.round+1}/${act.total} · ✅ ${act.right} · ${act.carrying?"carry it to the RIGHT trough!":"press E at the sack to scoop"}`);
+    if(act.carrying){
+      const pp=CITY.player.group.position, f=CITY.player.group.rotation.y;
+      scoopM.position.set(pp.x+Math.sin(f)*0.5, 1.2+Math.sin(t*6)*0.05, pp.z+Math.cos(f)*0.5);
+    }
+    troughs.forEach(tr=>{
+      const u=tr.g.userData;
+      if(u.bounce>0){ u.bounce-=dt*1.2; u.animal.position.y=Math.abs(Math.sin(u.bounce*14))*0.5*u.bounce; if(u.bounce<=0)u.animal.position.y=0; }
+      if(u.shake>0){ u.shake-=dt*2; u.animal.rotation.y=Math.sin(u.shake*30)*0.5*u.shake; if(u.shake<=0)u.animal.rotation.y=0; }
+    });
+  };
 }
 
 
@@ -18776,7 +19784,9 @@ const COLOR_SHEETS=[
   { id:"soccer", name:"Soccer Star", ico:"⚽", tags:["sport","soccer","ball"],
     regions:()=>{ const r=[{n:"ball", p:_ell(320,320,190,190)},
         {n:"hexC", p:_poly([[320,250],[385,295],[360,370],[280,370],[255,295]])}];
-      [[320,120,50],[150,270,45],[490,270,45],[210,470,45],[430,470,45]].forEach(([x,y,rr],i)=>{
+      // r24: hex patches pulled fully INSIDE the ball — the old positions poked
+      // outside the circle, leaving stray overlapping outlines around the ball
+      [[320,185,44],[205,270,42],[435,270,42],[240,430,42],[400,430,42]].forEach(([x,y,rr],i)=>{
         r.push({n:"hex"+i, p:_poly([[x,y-rr],[x+rr*0.9,y-rr*0.3],[x+rr*0.6,y+rr*0.8],[x-rr*0.6,y+rr*0.8],[x-rr*0.9,y-rr*0.3]])}); });
       return r; },
     decor:(g)=>{} },
@@ -19003,6 +20013,15 @@ function closeColoring(){
 function startColoringSheet(sh){
   const scr=document.getElementById("scr-city");
   CITY.menuOpen="coloring";
+  // r24: colors are earned PER DRAWING — starting a different sheet (e.g. picking a
+  // new picture after finishing one) locks the palette back to the primaries, so
+  // every drawing re-earns its colors through questions. Re-opening the SAME sheet
+  // (e.g. after a wrong-answer modal) keeps what you've unlocked for it.
+  if(CSAVE.colorSheet!==sh.id){
+    CSAVE.colorSheet=sh.id;
+    CSAVE.colors=COLOR_FREE.slice();
+    citySave();
+  }
   const regions=sh.regions().map(r=>({...r, color:"#ffffff"}));
   let current=CSAVE.colors[0]||"#d83a3a";
   const wrap=document.createElement("div");
@@ -19025,9 +20044,13 @@ function startColoringSheet(sh){
   const pal=wrap.querySelector("#col-pal"), prog=wrap.querySelector("#col-prog");
   function draw(){
     g.clearRect(0,0,640,640); g.fillStyle="#fff"; g.fillRect(0,0,640,640);
-    regions.forEach(r=>{ g.fillStyle=r.color; g.fill(r.p); });
+    // r24: fill+stroke each region IN ORDER (painter's algorithm). The old code
+    // filled everything first and then stroked every outline on top, so shapes
+    // layered under others (petals under a flower center, wings under a body,
+    // a bunny head over its body…) drew crossing lines through the picture.
+    // Now a later region's fill cleanly covers the hidden part of earlier outlines.
     g.lineWidth=5; g.strokeStyle="#22283f";
-    regions.forEach(r=>g.stroke(r.p));
+    regions.forEach(r=>{ g.fillStyle=r.color; g.fill(r.p); g.stroke(r.p); });
     g.fillStyle="#22283f"; g.strokeStyle="#22283f"; g.lineWidth=4;
     sh.decor&&sh.decor(g);
     const done=regions.filter(r=>r.color!=="#ffffff").length;
@@ -19131,7 +20154,9 @@ function fortMats(){
 function fortGeo(t){
   if(t==="wall")  return new THREE.BoxGeometry(4,3,0.26);
   if(t==="floor") return new THREE.BoxGeometry(4,0.24,4);
-  if(t==="roof"){ const g=new THREE.ConeGeometry(2.85,1.7,4); g.rotateY(Math.PI/4); g.translate(0,0.85,0); return g; }
+  // r24: roof radius 2·√2 -> the 4-sided cone's square base is EXACTLY 4×4,
+  // axis-aligned after the 45° twist, so its eaves sit flush on the walls
+  if(t==="roof"){ const g=new THREE.ConeGeometry(2*Math.SQRT2,1.7,4); g.rotateY(Math.PI/4); g.translate(0,0.85,0); return g; }
   // ramp: a tilted slab spanning one 4m cell, rising one 3m level (front edge low)
   const len=Math.hypot(4,3), ang=Math.atan2(3,4);
   const g=new THREE.BoxGeometry(4,0.26,len);
@@ -19149,10 +20174,30 @@ function fortTarget(){
   const p=CITY.player.group.position, yaw=CITY.look.yaw;
   // camera-forward is (-sin yaw, -cos yaw) in this engine
   const px=p.x-Math.sin(yaw)*5.2, pz=p.z-Math.cos(yaw)*5.2;
-  const x=Math.round(px/FORT.cell)*FORT.cell, z=Math.round(pz/FORT.cell)*FORT.cell;
-  const lvl=Math.max(0, Math.round(p.y/FORT.lvl));
   const fwd=Math.round((yaw+Math.PI)/(Math.PI/2));   // ramp high-end points away from the player
-  return { x, z, y:lvl*FORT.lvl, r:((fwd%4)+4+FORT.rot)%4 };
+  const r=((fwd%4)+4+FORT.rot)%4;
+  const C=FORT.cell, H=C/2;
+  let x,z;
+  if(FORT.piece==="wall"){
+    // r24 snap fix: walls snap to CELL EDGES (they used to float in cell
+    // centers, so four walls could never close a box). On edges, a floor +
+    // 4 walls + a roof share every face perfectly flush, corners meeting.
+    if(r%2===0){ x=Math.round(px/C)*C;     z=Math.round((pz-H)/C)*C+H; }   // span along x, on a z-edge
+    else       { x=Math.round((px-H)/C)*C+H; z=Math.round(pz/C)*C;     }   // span along z, on an x-edge
+  } else {
+    x=Math.round(px/C)*C; z=Math.round(pz/C)*C;
+  }
+  const lvl=Math.max(0, Math.round(p.y/FORT.lvl));
+  return { x, z, y:lvl*FORT.lvl, r };
+}
+/* r24: ONE source of truth for where a piece's mesh sits — the ghost preview
+   and the placed piece use identical math, so what you see is what you get */
+function fortPiecePose(t,g){
+  const yaw=g.r*(Math.PI/2);
+  if(t==="wall")  return {x:g.x, y:g.y+1.5,  z:g.z, yaw};   // 3m wall centered on its level
+  if(t==="floor") return {x:g.x, y:g.y+0.12, z:g.z, yaw};   // slab top at y+0.24
+  if(t==="roof")  return {x:g.x, y:g.y,      z:g.z, yaw};   // base sits EXACTLY on wall tops (was +0.12 -> gap)
+  return {x:g.x, y:g.y, z:g.z, yaw};                        // ramp
 }
 function fortKey(t,g){ return t+"|"+g.x+"|"+g.y+"|"+g.z+"|"+((t==="wall"||t==="ramp")?g.r%2:0); }
 
@@ -19168,10 +20213,8 @@ function fortPlace(){
 }
 function fortSpawn(t,g,save){
   const m=fortMesh(t,false);
-  const yaw=g.r*(Math.PI/2);
-  if(t==="wall"){ m.position.set(g.x,g.y+1.5,g.z); m.rotation.y=yaw; }
-  else if(t==="ramp"){ m.position.set(g.x,g.y,g.z); m.rotation.y=yaw; }
-  else { m.position.set(g.x,g.y+(t==="floor"?0.12:0.12),g.z); m.rotation.y=yaw; }
+  const pose=fortPiecePose(t,g);                                 // r24: shared placement math
+  m.position.set(pose.x,pose.y,pose.z); m.rotation.y=pose.yaw;
   CITY.scene.add(m);
   const rec={t, x:g.x, y:g.y, z:g.z, r:g.r, mesh:m, colls:[]};
   // ground-level walls block walking & driving (elevated ones you pass under)
@@ -19272,11 +20315,9 @@ function fortUpdateGhost(){
   const blocked=!!FORT.byKey[fortKey(t,g)]||FORT.pieces.length>=FORT.max;
   FORT.ghost.material=blocked?fortMats().bad:fortMats().ok;
   FORT.ghost.visible=true;
-  const yaw=g.r*(Math.PI/2);
-  if(t==="wall") FORT.ghost.position.set(g.x,g.y+1.5,g.z);
-  else if(t==="ramp") FORT.ghost.position.set(g.x,g.y,g.z);
-  else FORT.ghost.position.set(g.x,g.y+0.12,g.z);
-  FORT.ghost.rotation.y=yaw;
+  const pose=fortPiecePose(t,g);                                 // r24: shared placement math
+  FORT.ghost.position.set(pose.x,pose.y,pose.z);
+  FORT.ghost.rotation.y=pose.yaw;
 }
 
 /* ---- input wiring (runs alongside the main input handlers) ---- */
@@ -19296,6 +20337,47 @@ function fortInitInput(){
     fortPlace();
   });
   CITY.dyn.push({update:()=>fortUpdateGhost()});
+}
+
+/* ============================================================================
+   r24: WORLD-COLLISION UPGRADES — registered from THIS file because the
+   district files are read-only. This script loads after 03-districts /
+   03z-downtown define the originals, and the city is only built later inside
+   CITY.enter(), so these overrides are what the builders actually call.
+   ============================================================================ */
+/* houses & venues: a TRUE rotated-box footprint replaces the old
+   circles-along-the-long-axis approximation, whose open corners let players
+   walk straight through house walls. Entrances still work: every enterable
+   door is an E-interactable ~1.2m OUTSIDE the footprint that teleports you
+   into the interior zone — nothing walks "through" the doorway itself. */
+addWideColl=function(cx,cz,w,d,yaw,zone){
+  CITY.colliders.push({x:cx,z:cz,hw:w/2,hd:d/2,cos:Math.cos(yaw),sin:Math.sin(yaw),zone:zone||null});
+};
+/* LOW obstacles carry a height (c.h) so the player can JUMP them —
+   02-player skips any collider whose top is below the player's feet */
+let __r24LowH=0;
+const _r24AddColl=addColl;
+addColl=function(x,z,r,zone){
+  _r24AddColl(x,z,r,zone);
+  if(__r24LowH) CITY.colliders[CITY.colliders.length-1].h=__r24LowH;
+};
+const _r24Fence=propFence;
+propFence=function(B,x1,z1,x2,z2,col,h){                 // fences: jumpable
+  __r24LowH=(h||1.0)+0.25;
+  try{ _r24Fence(B,x1,z1,x2,z2,col,h); } finally{ __r24LowH=0; }
+};
+const _r24Bench=propBench;
+propBench=function(B,x,z,ry){                            // benches: solid now, but jumpable
+  _r24Bench(B,x,z,ry);
+  for(const c of CITY.colliders) if(c.x===x&&c.z===z&&c.h===0.78) return;   // interiors rebuild — no dupes
+  CITY.colliders.push({x,z,r:0.85,h:0.78,zone:null});
+};
+if(typeof propMailbox==="function"){
+  const _r24Mail=propMailbox;
+  propMailbox=function(B,x,z,ry,col){                    // mailboxes: jumpable
+    __r24LowH=1.35;
+    try{ _r24Mail(B,x,z,ry,col); } finally{ __r24LowH=0; }
+  };
 }
 
 
@@ -19336,11 +20418,22 @@ function openShop(title, sub, items, opts){
   return m;
 }
 
+/* r24: real garment variety — style tags picked up by dressHuman (01y).
+   OUTFITS itself lives in 02-player.js (read-only), so we tag it here. */
+(function(){
+  if(typeof OUTFITS==="undefined") return;
+  const tag={ sport:"jersey", racer:"jacket", wizard:"dress", royal:"suit", neon:"hoodie" };
+  Object.keys(tag).forEach(k=>{ if(OUTFITS[k]) OUTFITS[k].style=tag[k]; });
+})();
+const OUTFIT_STYLE_DESC={ jersey:"big number on the chest", jacket:"open jacket + undershirt",
+  dress:"flared robe skirt", suit:"collar & tie", hoodie:"hood + kangaroo pocket" };
+
 /* ---------------- outfitter (plaza) ---------------- */
 function openOutfitter(){
   const items=[];
   Object.keys(OUTFITS).forEach(k=>{ const o=OUTFITS[k];
-    items.push({ key:"o_"+k, ico:"👕", name:o.name, price:o.price, desc:k==="citizen"?"the classic":"",
+    items.push({ key:"o_"+k, ico:"👕", name:o.name, price:o.price,
+      desc:k==="citizen"?"the classic":(OUTFIT_STYLE_DESC[o.style]||""),
       owned:CSAVE.owned.outfits.indexOf(k)>=0, equipped:CSAVE.equipped.outfit===k,
       onBuy:()=>{ CSAVE.owned.outfits.push(k); CSAVE.equipped.outfit=k; citySave(); rebuildAvatar(); },
       onEquip:()=>{ CSAVE.equipped.outfit=k; citySave(); rebuildAvatar(); cityToast("👕 "+o.name+" equipped"); },
@@ -19353,6 +20446,59 @@ function openOutfitter(){
       reopen:openOutfitter }); });
   openShop("🧢 The Outfitter","dress your explorer — visible in 3rd person",items,{id:"outfitter"});
 }
+
+/* ---------------- r24: cuter hats ----------------
+   buildHatMesh lives in 02-player.js (read-only); the worst offenders (cap,
+   snorkel, phones, antler) are overridden here with better-proportioned,
+   kid-cute versions. Everything else falls through to the original builder. */
+const _hatMeshV1=buildHatMesh;
+buildHatMesh=function(key){
+  if(key!=="cap"&&key!=="snorkel"&&key!=="phones"&&key!=="antler") return _hatMeshV1(key);
+  const g=new THREE.Group(); const M=(c)=>new THREE.MeshLambertMaterial({color:c});
+  const add=(geo,c,x,y,z)=>{ const m=new THREE.Mesh(geo,M(c)); m.position.set(x||0,y||0,z||0);
+    m.castShadow=true; g.add(m); return m; };
+  if(key==="cap"){
+    // rounded dome that hugs the skull + curved pie-slice brim + button
+    const dome=add(new THREE.SphereGeometry(0.33,14,10,0,Math.PI*2,0,Math.PI/2),0xd8382e,0,-0.02,0);
+    dome.scale.set(1,0.82,1.06);
+    const brim=add(new THREE.CylinderGeometry(0.35,0.37,0.035,14,1,false,-Math.PI*0.30,Math.PI*0.60),0xb92c24,0,0.0,0.02);
+    brim.rotation.x=0.10; brim.material.side=THREE.DoubleSide;
+    add(new THREE.SphereGeometry(0.045,8,6),0xffffff,0,0.255,0);
+  } else if(key==="snorkel"){
+    // friendly dive mask: rim + tinted lens at eye level, strap ring, orange tube
+    add(new THREE.BoxGeometry(0.36,0.17,0.07),0x2a8ab0,0,-0.09,0.20);
+    const lens=add(new THREE.BoxGeometry(0.30,0.12,0.08),0xbfe4ff,0,-0.09,0.21);
+    lens.material.transparent=true; lens.material.opacity=0.55;
+    const strap=add(new THREE.TorusGeometry(0.26,0.032,6,16),0x2a8ab0,0,-0.08,0);
+    strap.rotation.x=Math.PI/2;
+    add(new THREE.CylinderGeometry(0.042,0.042,0.55,8),0xff8a3d,0.30,0.10,0.02);
+    add(new THREE.SphereGeometry(0.056,8,6),0xff8a3d,0.30,0.38,0.02);   // rounded top
+    const elbow=add(new THREE.CylinderGeometry(0.04,0.042,0.16,8),0xff8a3d,0.28,-0.13,0.09);
+    elbow.rotation.x=0.9;
+  } else if(key==="phones"){
+    // chunky headphones: top arch band + real ear cups with colored pads
+    add(new THREE.TorusGeometry(0.30,0.055,8,18,Math.PI),0x2c3352,0,-0.02,0);
+    for(const s of[-1,1]){
+      const cup=add(new THREE.CylinderGeometry(0.125,0.125,0.09,12),0x2c3352,s*0.30,-0.06,0);
+      cup.rotation.z=Math.PI/2;
+      const pad=add(new THREE.SphereGeometry(0.095,10,8),0xff5db1,s*0.355,-0.06,0);
+      pad.scale.set(0.45,1,1);
+    }
+  } else if(key==="antler"){
+    // cute rounded antlers: soft headband, splayed stalks, ball-tipped prongs
+    const band=add(new THREE.TorusGeometry(0.29,0.035,6,16),0x7a5a3a,0,-0.02,0);
+    band.rotation.x=Math.PI/2;
+    for(const s of[-1,1]){
+      const stalk=add(new THREE.CylinderGeometry(0.045,0.06,0.34,7),0x9a7248,s*0.18,0.15,0);
+      stalk.rotation.z=-s*0.28;
+      add(new THREE.SphereGeometry(0.055,7,6),0x9a7248,s*0.245,0.31,0);
+      const prong=add(new THREE.CylinderGeometry(0.032,0.045,0.20,6),0x9a7248,s*0.30,0.21,0);
+      prong.rotation.z=-s*0.95;
+      add(new THREE.SphereGeometry(0.042,7,6),0x9a7248,s*0.385,0.26,0);
+    }
+  }
+  return g;
+};
 
 /* ---------------- dealership / dock ---------------- */
 function openDealership(){
@@ -19692,6 +20838,11 @@ function cityInitHUD(){
     cityModalConfirm("🚪 Log out?","Your coins, quests and city are saved. You'll go back to the start screen — perfect for switching players or re-doing the questionnaire.",
       ()=>{ CITY.active=false; cityStopLoop(); MUSIC.stop&&MUSIC.stop(); startOnboarding(); }); };
   const mini=document.createElement("canvas"); mini.id="city-mini"; mini.className="chud"; mini.width=170; mini.height=170; scr.appendChild(mini);
+  // r24: the minimap IS the map button — click/tap it to open the big map (M still works)
+  mini.style.cursor="pointer"; mini.style.pointerEvents="auto"; mini.title="Open the city map (M)";
+  mini.addEventListener("click",()=>{ if(!CITY.active||CITY.paused) return;
+    if(CITY.menuOpen==="map") cityCloseMenu&&cityCloseMenu();
+    else if(!CITY.menuOpen) cityOpenMap&&cityOpenMap(); });
   const clock=document.createElement("div"); clock.id="city-clock"; clock.className="chud";
   clock.innerHTML=`<span class="chud-pill" id="city-clock-pill">☀️ Day</span>`; scr.appendChild(clock);
   const ban=document.createElement("div"); ban.id="city-banner"; ban.className="chud"; ban.innerHTML="<h2></h2><p></p>"; scr.appendChild(ban);
@@ -19709,7 +20860,8 @@ function cityInitHUD(){
   const help=document.createElement("div"); help.id="city-help"; help.className="chud";
   help.innerHTML=`<div><span class="key">W A S D</span>move · <span class="key">Shift</span>run · <span class="key">Space</span>jump</div>
     <div><span class="key">Mouse</span>look · <span class="key">Click</span>grab/free the mouse · <span class="key">V</span>1st/3rd person</div>
-    <div><span class="key">E</span>interact · <span class="key">G</span>vehicles · <span class="key">M</span>map · <span class="key">Q</span>quests</div>
+    <div><span class="key">E</span>interact · <span class="key">Click</span>shoot/throw in games · <span class="key">G</span>vehicles</div>
+    <div><span class="key">M</span>map (or click the minimap) · <span class="key">Q</span>quests</div>
     <div><span class="key">B</span>BUILD anywhere (1-4 pieces · R rotate · Z remove) · <span class="key">F</span>camera · <span class="key">H</span>hide this</div>`;
   scr.appendChild(help);
   CITY.ui={tl,mini,ban,pr,qt,ts,act,help,miniG:mini.getContext("2d")};
@@ -19836,6 +20988,7 @@ function cityOpenMap(){
   const tv=m.querySelector("#map-travel");
   const mkBtn=(label,fn)=>{ const b=document.createElement("button"); b.className="cbtn ghost"; b.textContent=label; b.onclick=fn; tv.appendChild(b); };
   mkBtn("🏛️ Plaza",()=>{ cityCloseMenu(); cityTeleport("island", 6, 30, 0); });
+  if(typeof cityOpenTravel==="function") mkBtn("🎈 Island Worlds…",()=>{ cityCloseMenu(true); cityOpenTravel(); });  // r24
   DISTRICTS.forEach(d=>{ if(CSAVE.discovered.indexOf(d.key)>=0)
     mkBtn(d.ico+" "+d.name, ()=>{ cityCloseMenu(); const L=Math.hypot(d.x,d.z), f=1-58/L; cityTeleport("island", d.x*f, d.z*f, Math.atan2(-(d.x*f), -(d.z*f))+Math.PI); }); });
 }
@@ -19843,6 +20996,11 @@ function cityOpenMap(){
 /* ---------- per-frame HUD ---------- */
 let _miniT=0;
 function cityUpdateHUD(dt,t){
+  // r24: nameplates ("Max" bubble over the player, NPC name tags) hide during
+  // any activity/menu/2D game so they never cover question UI; restored on exit
+  const _tagsOff=!!CITY.activity||!!CITY.menuOpen||!!CITY.paused;
+  if(CITY.player&&CITY.player.tag) CITY.player.tag.visible=!_tagsOff;
+  if(CITY.npcs) for(const _n of CITY.npcs){ if(_n.tag) _n.tag.visible=!_tagsOff; }
   // hop-off button
   const hop=document.getElementById("city-hopoff");
   if(hop){ const show=CITY.vehicle && !CITY.activity && !CITY.menuOpen;
@@ -20071,19 +21229,32 @@ function cityInitTouch(){
     return b;
   };
   mkBtn("⤒","big","right:112px;bottom:86px;","Space","jump / fly up");
-  mkBtn("E","big","right:26px;bottom:26px;","KeyE","interact");
+  const eb=mkBtn("🤝","big","right:26px;bottom:26px;","KeyE","interact / enter");
+  /* r24: SHOOT and INTERACT are separate buttons now. 🎯 shoots (hold to
+     charge, release to fire — same events a mouse click sends), 🤝 is the
+     old E interact. 🎯 only appears during aiming games/activities. */
+  const shootB=document.createElement("div");
+  shootB.className="tbtn big"; shootB.style.cssText="right:26px;bottom:110px;";
+  shootB.textContent="🎯"; shootB.title="shoot / throw";
+  shootB.addEventListener("touchstart",(e)=>{ e.preventDefault(); e.stopPropagation();
+    if(CITY.activity) cityEmit("click",{button:0}); },{passive:false});
+  shootB.addEventListener("touchend",(e)=>{ e.preventDefault(); e.stopPropagation();
+    if(CITY.activity) cityEmit("clickup",{button:0}); },{passive:false});
+  scr.appendChild(shootB);
   const xb=mkBtn("✕","small","right:36px;bottom:196px;","KeyX","hop off / quit");
   const cb=mkBtn("⤓","small","right:118px;bottom:196px;","KeyC","fly down");
   mkBtn("🚗","small","left:10px;top:60px;","KeyG","vehicles");
-  mkBtn("🗺️","small","left:10px;top:108px;","KeyM","map");
-  mkBtn("📜","small","left:10px;top:156px;","KeyQ","quests");
-  mkBtn("🔨","small","left:10px;top:204px;","KeyB","build");
-  mkBtn("👁","small","left:10px;top:252px;","KeyV","camera view");
+  // r24: the 🗺️ map toggle button is gone — tapping the minimap (top-right) opens the map
+  mkBtn("📜","small","left:10px;top:108px;","KeyQ","quests");
+  mkBtn("🔨","small","left:10px;top:156px;","KeyB","build");
+  mkBtn("👁","small","left:10px;top:204px;","KeyV","camera view");
   // context visibility
   CITY.dyn.push({update:()=>{
     const inV=!!CITY.vehicle, act=!!CITY.activity;
     xb.style.display=(inV||act)?"flex":"none";
     cb.style.display=(inV&&CITY.vehicle.def&&CITY.vehicle.def.type==="fly")?"flex":"none";
+    shootB.style.display=act?"flex":"none";                                       // r24
+    eb.style.display=(act&&!CITY.activity.allowInteract)?"none":"flex";           // r24: no accidental quit-by-E mid-game
   }});
 
   /* ---------- build mode: tappable bar + place/rotate/remove ---------- */
@@ -20139,7 +21310,7 @@ function cityInitTouch(){
    10-init: wire the city into the platform (monkey-patches) + enter/exit flow
    ============================================================================ */
 
-const CITY_BUILD="r23-consent (timestamped parental consent: required questionnaire checkbox + one-time gate for older profiles)";
+const CITY_BUILD="r24-playtest (43-item playtest batch: sports overhaul, island worlds, real collision, arcade fixes, character polish)";
 try{ console.log("%c🌆 Learning City "+CITY_BUILD, "font-weight:bold;color:#57d98a"); }catch(e){}
 let _cityBuilt=false;
 CITY.enter=function(){
