@@ -11,8 +11,11 @@
 import http from "node:http";
 import { WebSocketServer } from "ws";
 import { handleGenerate, handleClassCreate, handleClassGet, SHARED_CACHE, CONFIG } from "./generate.core.mjs";
-import { handleTrack, statsJSON, authorized, dashboardHTML } from "./analytics.mjs";
+import { handleTrack, statsJSON, dashboardHTML, exportAll, exportCSV } from "./analytics.mjs";
 import { gate, recordUsage, budgetJSON, LIMITS } from "./budget.mjs";
+import { handleConsent, handlePurge } from "./consent.mjs";
+import { pilotHTML, pilotDataJSON, deviceJSON } from "./pilot.mjs";
+import { keyAuth, rateLimit, readBody, ipOf, SEC_HEADERS } from "./security.mjs";
 
 const PORT = process.env.PORT || 8787;
 const CORS = {
@@ -32,41 +35,58 @@ if (!env.apiKey) console.warn("⚠  ANTHROPIC_API_KEY is not set — AI generati
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") { res.writeHead(204, CORS); return res.end(); }
   const url = new URL(req.url, "http://x");
+  const J = (status, obj) => { res.writeHead(status, { "content-type": "application/json", ...CORS, ...SEC_HEADERS }); res.end(JSON.stringify(obj)); };
+  const HTML = (html) => { res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...SEC_HEADERS }); res.end(html); };
+  /* admin auth with timing-safe compare + per-IP brute-force lockout (r28) */
+  const admin = () => { const a = keyAuth(req, url); if (!a.ok) J(a.status, { ok: false, reason: a.reason }); return a.ok; };
+
   if (url.pathname === "/health") {
-    res.writeHead(200, { "content-type": "application/json", ...CORS });
-    return res.end(JSON.stringify({ ok: true, ws: true, track: true, keyConfigured: !!env.apiKey, model: env.model,
-      aiToday: budgetJSON().today }));
+    return J(200, { ok: true, ws: true, track: true, keyConfigured: !!env.apiKey, model: env.model,
+      aiToday: budgetJSON().today });
   }
-  if (url.pathname === "/budget.json") {
-    if (!authorized(url)) { res.writeHead(403, { "content-type": "application/json", ...CORS }); return res.end(JSON.stringify({ ok: false, reason: "bad key" })); }
-    res.writeHead(200, { "content-type": "application/json", ...CORS });
-    return res.end(JSON.stringify({ ok: true, budget: budgetJSON() }));
+  if (url.pathname === "/budget.json") { if (!admin()) return; return J(200, { ok: true, budget: budgetJSON() }); }
+  if (url.pathname === "/stats.json")  { if (!admin()) return; return J(200, statsJSON()); }
+  if (url.pathname === "/dashboard")   { return HTML(dashboardHTML(url)); }
+
+  /* ---- r28: Pilot Data Portal + full data access ---- */
+  if (url.pathname === "/pilot")           { return HTML(pilotHTML()); }
+  if (url.pathname === "/pilot-data.json") { if (!admin()) return; return J(200, pilotDataJSON()); }
+  if (url.pathname === "/device.json")     { if (!admin()) return; return J(200, deviceJSON(String(url.searchParams.get("device") || ""))); }
+  if (url.pathname === "/export.json") {
+    if (!admin()) return;
+    res.writeHead(200, { "content-type": "application/json", "content-disposition": "attachment; filename=aibc-pilot-data.json", ...SEC_HEADERS });
+    return res.end(JSON.stringify({ exportedAt: new Date().toISOString(), events: exportAll() }));
   }
-  /* analytics: stats + dashboard (GET, ADMIN_KEY-protected if set) */
-  if (url.pathname === "/stats.json") {
-    if (!authorized(url)) { res.writeHead(403, { "content-type": "application/json", ...CORS }); return res.end(JSON.stringify({ ok: false, reason: "bad key" })); }
-    res.writeHead(200, { "content-type": "application/json", ...CORS });
-    return res.end(JSON.stringify(statsJSON()));
+  if (url.pathname === "/export.csv") {
+    if (!admin()) return;
+    res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "content-disposition": "attachment; filename=aibc-pilot-data.csv", ...SEC_HEADERS });
+    return res.end(exportCSV());
   }
-  if (url.pathname === "/dashboard") {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    return res.end(dashboardHTML(url));
+  /* a family's own data by device id (the id itself is the credential) */
+  if (url.pathname === "/my-data.json") {
+    const device = String(url.searchParams.get("device") || "");
+    if (!rateLimit("mydata:" + ipOf(req), 20, 600e3)) return J(429, { ok: false, reason: "slow down" });
+    return J(200, deviceJSON(device));
   }
-  const routes = { "/generate-content": handleGenerate, "/class-create": handleClassCreate, "/class-get": handleClassGet, "/track": handleTrack };
+
+  const routes = { "/generate-content": handleGenerate, "/class-create": handleClassCreate, "/class-get": handleClassGet,
+    "/track": handleTrack, "/consent": handleConsent, "/purge": handlePurge };
   const route = routes[url.pathname];
   if (req.method !== "POST" || !route) {
-    res.writeHead(404, { "content-type": "application/json", ...CORS });
-    return res.end(JSON.stringify({ ok: false, reason: "POST /generate-content | /class-create | /class-get | /track · GET /stats.json | /dashboard · WS /ws" }));
+    return J(404, { ok: false, reason: "POST /generate-content | /class-create | /class-get | /track | /consent | /purge · GET /pilot | /dashboard | /stats.json | /export.json | /export.csv · WS /ws" });
   }
-  let raw = ""; for await (const c of req) raw += c;
+  /* r28: per-IP rate limits on the open POST endpoints + bounded bodies */
+  const ip = ipOf(req);
+  const RL = { "/track": [120, 600e3], "/consent": [10, 600e3], "/purge": [5, 600e3] }[url.pathname];
+  if (RL && !rateLimit(url.pathname + ":" + ip, RL[0], RL[1])) return J(429, { ok: false, reason: "rate limited" });
+  let raw = "";
+  try { raw = await readBody(req, 512 * 1024); } catch (e) { return J(413, { ok: false, reason: "body too large" }); }
   let body = {}; try { body = JSON.parse(raw || "{}"); } catch (_) {}
   try {
     const out = await route(body, env);
-    res.writeHead(out.status, { "content-type": "application/json", ...CORS });
-    res.end(JSON.stringify(out.json));
+    J(out.status, out.json);
   } catch (e) {
-    res.writeHead(500, { "content-type": "application/json", ...CORS });
-    res.end(JSON.stringify({ ok: false, reason: String(e && e.message || e) }));
+    J(500, { ok: false, reason: String(e && e.message || e) });
   }
 });
 

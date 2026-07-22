@@ -41,6 +41,28 @@ const S = {
   devices: new Map(),          // deviceId -> {hour, calls}
   refused: 0, lastRefusal: null,
 };
+/* r28: counters persist to $DATA_DIR/budget-state.json so a restart/deploy can
+   no longer reset the spend meters (old limitation #5). Stale keys roll off. */
+import { saveJSON, loadJSON } from "./store.mjs";
+try {
+  const saved = loadJSON("budget-state.json", null);
+  if (saved) {
+    if (saved.day === dayKey())     { S.dayCalls = saved.dayCalls || 0; }
+    if (saved.month === monthKey()) { S.monthCalls = saved.monthCalls || 0; S.inTok = saved.inTok || 0; S.outTok = saved.outTok || 0; }
+    S.refused = saved.refused || 0; S.lastRefusal = saved.lastRefusal || null;
+    console.log(`💰 budget: restored counters — ${S.dayCalls} calls today, ${S.monthCalls} this month`);
+  }
+} catch (_) {}
+let _saveT = null;
+function persist() {
+  if (_saveT) return;
+  _saveT = setTimeout(() => { _saveT = null;
+    saveJSON("budget-state.json", { day: S.day, dayCalls: S.dayCalls,
+      month: S.month, monthCalls: S.monthCalls, inTok: S.inTok, outTok: S.outTok,
+      refused: S.refused, lastRefusal: S.lastRefusal });
+  }, 3000);
+  _saveT.unref?.();
+}
 function roll() {
   if (S.day !== dayKey())   { S.day = dayKey();     S.dayCalls = 0; }
   if (S.month !== monthKey()) { S.month = monthKey(); S.monthCalls = 0; S.inTok = 0; S.outTok = 0; }
@@ -64,6 +86,7 @@ export function gate(deviceId) {
     if (S.devices.size > 2000) S.devices.delete(S.devices.keys().next().value);
   }
   S.dayCalls++; S.monthCalls++;
+  persist();
   return { ok: true };
 }
 /* record real token usage from the API response's usage block */
@@ -71,6 +94,7 @@ export function recordUsage(usage) {
   if (!usage) return;
   S.inTok  += usage.input_tokens  || 0;
   S.outTok += usage.output_tokens || 0;
+  persist();
 }
 export function budgetJSON() {
   roll();
@@ -84,6 +108,6 @@ export function budgetJSON() {
     maxTokensPerCall: LIMITS.maxTokens,
     refused: S.refused, lastRefusal: S.lastRefusal,
     disabled: LIMITS.disabled,
-    note: "counters reset if the server restarts (free-tier disk is ephemeral) — caps are sized so even a fresh counter can't overspend",
+    note: "r28: counters persist to disk (budget-state.json) and survive restarts; with a Render disk at /var/data they also survive deploys",
   };
 }

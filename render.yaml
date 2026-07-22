@@ -25,3 +25,16 @@ services:
       - key: MAX_TOKENS_PER_CALL
         value: "1500"
       # set AI_DISABLED=1 in the Render dashboard to kill-switch AI instantly
+
+    # ── r28: MAKE PILOT DATA PERMANENT ─────────────────────────────────────
+    # The server stores all pilot data (telemetry, consents, budget counters)
+    # under /var/data automatically WHEN a persistent disk is mounted there.
+    # On the free plan the filesystem is wiped on every deploy/restart, so:
+    #   1. Upgrade this service to Starter (Render dashboard → Settings)
+    #   2. Uncomment the 3 lines below and push, or add the disk by hand
+    #      (Settings → Disks → Add Disk, mount path /var/data, 1 GB)
+    # 1 GB (≈ $0.25/mo) holds years of pilot telemetry.
+    # disk:
+    #   name: pilot-data
+    #   mountPath: /var/data
+    #   sizeGB: 1

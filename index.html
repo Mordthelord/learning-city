@@ -4912,12 +4912,26 @@ function renderParentCorner(){
     <div style="display:flex;gap:8px;flex-wrap:wrap" id="dc-row"></div>`);
   const dcRow=dc.querySelector("#dc-row");
   const dl=el("button","btn small","⬇ Download all data");
-  dl.onclick=()=>{ const out={}; FAMILY.KEYS().forEach(k=>{ try{ out[k]=JSON.parse(localStorage.getItem(k)); }catch(e){ out[k]=localStorage.getItem(k); } });
+  dl.onclick=async ()=>{ const out={};
+    FAMILY.KEYS().forEach(k=>{ try{ out[k]=JSON.parse(localStorage.getItem(k)); }catch(e){ out[k]=localStorage.getItem(k); } });
+    // r28: include the family's own pilot-telemetry copy from the backend (best-effort)
+    try{ const api=window.__AIBC_API;
+      if(api){ const r=await fetch(api+"/my-data.json?device="+encodeURIComponent(TELEM.device),{signal:AbortSignal.timeout(6000)});
+        const j=await r.json(); if(j&&j.ok) out.__pilotTelemetry=j; } }catch(e){}
     const blob=new Blob([JSON.stringify(out,null,2)],{type:"application/json"});
     const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="aibc-family-data.json"; a.click(); };
   const del=el("button","btn ghost small","🗑 Delete everything");
   del.onclick=()=>{ if(confirm("Delete this child's entire profile and progress from this device? This cannot be undone."))
-    { if(confirm("Really delete? The questionnaire will start fresh.")) FAMILY.fresh(); } };
+    { if(confirm("Really delete? The questionnaire will start fresh.")){
+        // r28: right-to-delete reaches the backend too — erase this device's pilot
+        // telemetry, withdraw consent, then rotate to a brand-new anonymous id
+        try{ const api=window.__AIBC_API;
+          if(api) fetch(api+"/purge",{method:"POST",headers:{"content-type":"application/json"},
+            body:JSON.stringify({device:TELEM.device})}).catch(()=>{}); }catch(e){}
+        try{ CONSENT.clear(); }catch(e){}
+        try{ TELEM.reset(); }catch(e){}
+        FAMILY.fresh();
+    } } };
   dcRow.appendChild(dl); dcRow.appendChild(del);
   show("scr-profile");
 }
@@ -6891,6 +6905,33 @@ const WsNet=(function(){
    Events buffer in localStorage and flush to the backend
    whenever it is reachable; nothing breaks fully offline.
    ============================================================ */
+/* r28 — CONSENT LAYER (Customer Demands §7.2):
+   telemetry stays ON-DEVICE until a parent/guardian (or a teacher class code)
+   has given consent. Consent is timestamped locally AND registered with the
+   pilot backend (anonymous device id only — never a name). */
+const CONSENT={ granted:false, _sent:false,
+  check(){ if(this.granted) return true;
+    try{
+      if(localStorage.getItem("aibc_consent_v1")==="1"){ this.granted=true; return true; }
+      const raw=(typeof loadRawProfile==="function")?loadRawProfile():null; if(!raw) return false;
+      if(raw.classInfo) return this.grant("school");                       // teacher/school consent
+      const p=raw.parent; if(p&&(p.consentAt||p.consentPlay)) return this.grant("parent");
+    }catch(e){}
+    return false; },
+  grant(role){ this.granted=true;
+    try{ localStorage.setItem("aibc_consent_v1","1"); }catch(e){}
+    const send=()=>{ const api=window.__AIBC_API;
+      if(!api){ setTimeout(send,5000); return; }
+      if(CONSENT._sent) return; CONSENT._sent=true;
+      try{ fetch(api+"/consent",{method:"POST",headers:{"content-type":"application/json"},
+        body:JSON.stringify({device:TELEM.device, granted:true, role:role||"parent", ver:"v1-2026-07",
+          lang:(typeof LANG!=="undefined"&&LANG==="he")?"he":"en",
+          cls:(typeof CONTENT!=="undefined"&&CONTENT.classInfo&&CONTENT.classInfo.code)||null})})
+        .catch(()=>{ CONSENT._sent=false; }); }catch(e){}
+    };
+    send(); return true; },
+  clear(){ this.granted=false; this._sent=false; try{ localStorage.removeItem("aibc_consent_v1"); }catch(e){} },
+};
 const TELEM=(function(){
   let device=null;
   try{ device=localStorage.getItem("tlp_dev_id");
@@ -6906,6 +6947,7 @@ const TELEM=(function(){
   let flushing=false;
   function flush(useBeacon){
     const api=window.__AIBC_API;
+    if(!CONSENT.check()) return;      // r28: nothing leaves the device before consent
     if(!api||!Q.length||flushing) return;
     const cls=(typeof CONTENT!=="undefined"&&CONTENT.classInfo&&CONTENT.classInfo.code)||null;
     const payload=JSON.stringify({device, cls, grade:(typeof CONFIG!=="undefined"&&CONFIG.grade)||null, events:Q.slice(0,400)});
@@ -6925,7 +6967,16 @@ const TELEM=(function(){
   /* playtime heartbeat: 1 event = 1 active minute */
   track("boot",{});
   setInterval(()=>{ if(!document.hidden) track("ping",{}); }, 60000);
-  return {track, flush, device};
+  const api={track, flush, device};
+  /* r28: full local wipe + fresh anonymous id (used by Parent Corner delete,
+     right after the backend purge) — the old id can never be repopulated */
+  api.reset=function(){
+    Q=[]; save();
+    device="d_"+Math.random().toString(36).slice(2,12);
+    try{ localStorage.setItem("tlp_dev_id",device); }catch(e){}
+    api.device=device;
+  };
+  return api;
 })();
 
 /* visible build stamp — tiny corner tag so anyone can tell which build they're on */
@@ -7176,8 +7227,9 @@ function enterHubFromProfile(){
   applyTheme(activeTheme()); MUSIC.start("lobby", activeTheme()); HUB.subject=CONFIG.subjects[0]||'english'; renderHub(); show("scr-hub"); }
 function consentNeeded(){
   try{ const raw=loadRawProfile(); if(!raw||raw.classInfo) return false;
-    const p=raw.parent; if(!p) return false;
-    return !(p.consentPlay||p.consentAt);
+    // r28: student-only profiles (no parent record at all) need a grown-up's OK too
+    const p=raw.parent;
+    return !(p&&(p.consentPlay||p.consentAt));
   }catch(e){ return false; }
 }
 function showConsentGate(onDone){
@@ -7198,6 +7250,7 @@ function showConsentGate(onDone){
     try{ const raw=loadRawProfile()||{}; raw.parent=raw.parent||{};
       raw.parent.consentPlay=true; raw.parent.consentAt=new Date().toISOString();
       saveRawProfile(raw); }catch(e){}
+    try{ CONSENT.grant("parent"); }catch(e){}          // r28: register with the pilot backend
     try{ TELEM.track("consent",{given:true}); }catch(e){}
     w.remove(); onDone&&onDone(); };
 }
@@ -22967,7 +23020,7 @@ function cityInitTouch(){
    10-init: wire the city into the platform (monkey-patches) + enter/exit flow
    ============================================================================ */
 
-const CITY_BUILD="r27d-isle-focus (focus mode now covers Glacier & Ember Isle — the game-pad kiosk that blocked the middle answer disappears with the rest of the world, and hidden-world colliders go ghost)";
+const CITY_BUILD="r28-datacore (pilot data backend: consent registry wired in-game, telemetry gated on consent, right-to-delete purges the server too, per-player /pilot data portal + CSV/JSON exports)";
 try{ console.log("%c🌆 Learning City "+CITY_BUILD, "font-weight:bold;color:#57d98a"); }catch(e){}
 let _cityBuilt=false;
 CITY.enter=function(){
