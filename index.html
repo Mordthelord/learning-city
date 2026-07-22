@@ -13292,10 +13292,10 @@ function cityBuildTerrain(){
   }
   gg.computeVertexNormals();
   const isle=new THREE.Mesh(gg, new THREE.MeshLambertMaterial({color:0xffffff, map:grassTex}));
-  isle.rotation.x=-Math.PI/2; isle.position.y=-0.12; isle.receiveShadow=true; scene.add(isle);
+  isle.rotation.x=-Math.PI/2; isle.position.y=-0.12; isle.receiveShadow=true; isle.userData.fk=1; scene.add(isle);   // fk: keep in focus mode
   // beach ring
   const beach=new THREE.Mesh(new THREE.RingGeometry(CITY_R-14, CITY_R+7, 72), new THREE.MeshLambertMaterial({color:0xe8d29a}));
-  beach.rotation.x=-Math.PI/2; beach.position.y=0.02; beach.receiveShadow=true; scene.add(beach);
+  beach.rotation.x=-Math.PI/2; beach.position.y=0.02; beach.receiveShadow=true; beach.userData.fk=1; scene.add(beach);
   // ocean
   const waterTex=makeNoiseTexture("#1f7fb2","#2c99cc",0.3); waterTex.repeat.set(160,160);
   // near ocean is a finer mesh that actually SWELLS; far ocean stays a flat skirt
@@ -13307,7 +13307,7 @@ function cityBuildTerrain(){
   ocean.rotation.x=-Math.PI/2; ocean.position.y=-0.55; scene.add(ocean);
   const skirtTex=waterTex.clone(); skirtTex.needsUpdate=true;
   const skirt=new THREE.Mesh(new THREE.PlaneGeometry(9000,9000,1,1), new THREE.MeshLambertMaterial({color:0xffffff, map:skirtTex, transparent:true, opacity:0.93}));
-  skirt.rotation.x=-Math.PI/2; skirt.position.y=-0.72; scene.add(skirt);
+  skirt.rotation.x=-Math.PI/2; skirt.position.y=-0.72; skirt.userData.fk=1; scene.add(skirt);
   CITY.world.ocean=ocean; CITY.world.waterTex=waterTex;
   {  // gentle two-wave swell on the near mesh (skipped on phones for perf)
     const pos=ocean.geometry.attributes.position, N=pos.count;
@@ -13326,7 +13326,7 @@ function cityBuildTerrain(){
   // foam ring hugging the shoreline, breathing slowly
   const foam=new THREE.Mesh(new THREE.RingGeometry(CITY_R+1.5, CITY_R+6, 96),
     new THREE.MeshBasicMaterial({color:0xeafaff, transparent:true, opacity:0.4, depthWrite:false}));
-  foam.rotation.x=-Math.PI/2; foam.position.y=-0.28; scene.add(foam);
+  foam.rotation.x=-Math.PI/2; foam.position.y=-0.28; foam.userData.fk=1; scene.add(foam);
   CITY.dyn.push({update:(dt,t)=>{ foam.material.opacity=0.28+Math.sin(t*0.8)*0.14;
     foam.position.y=-0.30+Math.sin(t*0.8)*0.05; }});
   // hazy islands on the horizon — cheap depth, big atmosphere
@@ -16573,7 +16573,9 @@ function chestDaily(x,z,amount,id){
    items are real jars in the room; E scoops; the board shows the recipe.
    ============================================================ */
 function startComposer(cfg){
-  actStart(CITY.activity={});
+  // r27c: composers run while the interior room is being BUILT (zone still says
+  // "island" until the teleport right after) — never let focus mode hide the room.
+  actStart(CITY.activity={keepWorld:true});
   const act=CITY.activity;
   act.allowInteract=true;        // E scoops ingredients — never exits this activity
   const o=IORG;
@@ -17797,7 +17799,7 @@ function buildTraffic(){
     TRAFFIC.push({g,vert,line,dir,lane:3.1*dir,t:-GRID.span+ (i*137)%(GRID.span*2), sp:8+(i%5)*1.3});
   }
   CITY.dyn.push({update:(dt)=>{
-    if(CITY.zone!=="island"){ TRAFFIC.forEach(c=>c.g.visible=false); return; }
+    if(CITY.zone!=="island" || (CITY.activity&&CITY.activity._hidden)){ TRAFFIC.forEach(c=>c.g.visible=false); return; }   // r27c: focus mode
     const p=CITY.player.group.position;
     TRAFFIC.forEach(c=>{
       c.g.visible=true;
@@ -18038,7 +18040,8 @@ function cityUpdateNPCs(dt,t){
   for(const npc of CITY.npcs){
     const g=npc.group;
     if(pp){ const d2v=dist2(pp.x,pp.z,g.position.x,g.position.z);
-      const vis=d2v<160*160 && CITY.zone==="island";
+      // r27c: never re-show NPCs while a game has the world hidden (focus mode)
+      const vis=d2v<160*160 && CITY.zone==="island" && !(CITY.activity&&CITY.activity._hidden);
       if(g.visible!==vis) g.visible=vis;
       if(!vis) continue;
       if(d2v<4.6*4.6){
@@ -18364,7 +18367,7 @@ function buildWalkers(){
     CITY.scene.add(g); WALKERS.push(w);
   }
   CITY.dyn.push({update:(dt)=>{
-    const island=CITY.zone==="island";
+    const island=CITY.zone==="island" && !(CITY.activity&&CITY.activity._hidden);   // r27c: hide during focus mode
     WALKERS.forEach(w=>{
       w.g.visible=island;
       if(!island) return;
@@ -19300,6 +19303,22 @@ function actStart(act){
   act.add=(m)=>{ CITY.scene.add(m); act._cleanup.push(m); return m; };
   act.on=(ev,fn)=>{ cityOn(ev,fn); act._subs.push([ev,fn]); };
   CITY.ui.act.style.display="block";
+  // r27c FOCUS MODE: entering a game makes the city fall away — you're left with
+  // the player, the game's own props (everything added AFTER this point), the
+  // question board, and the sky/grass/sea. Restored by actEnd. Games whose arena
+  // IS world geometry (race track, dive sub, runway catwalk) set keepWorld:true.
+  act._hidden=null;
+  if(CITY.zone==="island" && !act.keepWorld){
+    const w=CITY.world||{};
+    const keep=new Set([CITY.player&&CITY.player.group, CITY.vehicle&&CITY.vehicle.group,
+      CITY.pet&&CITY.pet.group, w.ocean, w.dome, w.stars, w.sunDisc, w.moonDisc, w.sunGlow]
+      .concat(w.clouds||[]).filter(Boolean));
+    act._hidden=[];
+    CITY.scene.children.forEach(o=>{
+      if(o.isLight || keep.has(o) || (o.userData&&o.userData.fk)) return;
+      if(o.visible){ o.visible=false; act._hidden.push(o); }
+    });
+  }
 }
 function actHUD(html){ CITY.ui.act.innerHTML=`<span class="chud-pill">${html}</span>`; }
 /* #45: first-time "how it works" card for a native activity mechanic. Keyed so it
@@ -19321,6 +19340,7 @@ function actIntro(key, title, steps){
 }
 function actEnd(silent){
   const act=CITY.activity; if(!act) return;
+  if(act._hidden){ act._hidden.forEach(o=>{ o.visible=true; }); act._hidden=null; }   // r27c: the world returns
   (act._cleanup||[]).forEach(m=>CITY.scene.remove(m));
   (act._subs||[]).forEach(([ev,fn])=>{ const a=CITY.events[ev]||[]; const i=a.indexOf(fn); if(i>=0) a.splice(i,1); });
   if(act.cleanup) act.cleanup();
@@ -19465,7 +19485,7 @@ function startRace(){
   if(!CITY.vehicle){ const owned=CSAVE.owned.vehicles.filter(k=>VEHICLES[k]&&VEHICLES[k].type!=="water"&&VEHICLES[k].type!=="fly");
     cityMountVehicle(owned.length?owned[owned.length-1]:"kart", SPOTS.trackStart.x, SPOTS.trackStart.z, districtFrame(d).yaw+Math.PI);
     if(!owned.length) cityToast("🏎️ Loaner kart provided for the race!"); }
-  const act={ laps:0, need:2, correct:0, total:0, t:0, nextCk:0, boost:0, aim:true };
+  const act={ laps:0, need:2, correct:0, total:0, t:0, nextCk:0, boost:0, aim:true, keepWorld:true };   // r27c: the track IS the game
   actStart(act);
   actIntro("race","🏁 Answer-Gate Grand Prix",[
     "Drive around the track — each lap has answer gates.",
@@ -20088,7 +20108,7 @@ function startDive(){
   cityExitVehicle(true);
   // hide player inside the sub
   const p=CITY.player; CITY.scene.remove(p.group);
-  const act={ round:0, total:10, right:0, depth:0 };
+  const act={ round:0, total:10, right:0, depth:0, keepWorld:true };   // r27c: the sub & sea ARE the game
   actStart(act);
   // temporary sea floor + rocks under the dive area
   const o={x:sub.position.x, z:sub.position.z};
@@ -20355,7 +20375,7 @@ function startRunway(){
   // r24: the catwalk deck TOP is y=0.9 (box 0.9 tall) — start ON it, not inside it
   CITY.player.group.position.set(startP.x,0.9,startP.z);
   CITY.look.yaw=F.yaw+Math.PI; CITY.look.pitch=-0.04;
-  const act={ ck:0, total:3, right:0 };
+  const act={ ck:0, total:3, right:0, keepWorld:true };   // r27c: you're ON the catwalk — it stays
   actStart(act);
   // paparazzi flashes
   function flashes(n){ for(let i=0;i<n;i++) setTimeout(()=>{
@@ -22941,7 +22961,7 @@ function cityInitTouch(){
    10-init: wire the city into the platform (monkey-patches) + enter/exit flow
    ============================================================================ */
 
-const CITY_BUILD="r27b-rings (field-goal rings: middle answer was physically unreachable over the goalpost — arc moved clear of the post, all rings at catchable height; + r27 clarity fixes)";
+const CITY_BUILD="r27c-focus (FOCUS MODE: entering any city game hides the whole world — just you, the game props, and the question; world returns when the game ends)";
 try{ console.log("%c🌆 Learning City "+CITY_BUILD, "font-weight:bold;color:#57d98a"); }catch(e){}
 let _cityBuilt=false;
 CITY.enter=function(){
