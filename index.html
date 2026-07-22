@@ -3107,10 +3107,35 @@ const SKILL_TO_TOPIC = {
   "Vocabulary":"vocabulary","Spelling":"spelling",
 };
 // Getter: generated topic > curated topic > general bank
+// r27 (#48): the static FAST.math bank is only 8 items/band, so a kid with no
+// specific math topic set saw the same sums come back fast. Math can be generated
+// endlessly, so the fallback is now a grade-scaled procedural bank (28 items/band
+// + a refresh() the quiz engine calls on exhaustion) — effectively no repeats.
+let _mathGenCache=null;
+function genMathBank(){
+  if(_mathGenCache) return _mathGenCache;
+  const R=(a,b)=>a+Math.floor(Math.random()*(b-a+1));
+  const near=(v,s)=>{const d1=v+R(1,s),d2=Math.max(0,v-R(1,s));return[String(d1),String(d2===d1?v+s+1:d2)];};
+  const g=Math.max(1,Math.min(8, CONFIG.grade||3));
+  const add=(lo,hi)=>()=>{const a=R(lo,hi),b=R(lo,hi),v=a+b;return{target:a+" + "+b,correct:String(v),decoys:near(v,Math.max(2,Math.round(v*0.12)))}};
+  const sub=(lo,hi)=>()=>{let a=R(lo,hi),b=R(lo,hi);if(b>a){const c=a;a=b;b=c;}const v=a-b;return{target:a+" − "+b,correct:String(v),decoys:near(v,3)}};
+  const mul=(lo,hi)=>()=>{const a=R(lo,hi),b=R(2,12),v=a*b;return{target:a+" × "+b,correct:String(v),decoys:near(v,Math.max(3,a))}};
+  const div=(hi)=>()=>{const b=R(2,hi),v=R(2,hi),a=b*v;return{target:a+" ÷ "+b,correct:String(v),decoys:near(v,3)}};
+  const lo=g<=2?2:(g<=4?10:100), hi=g<=2?10:(g<=4?60:500);
+  const mixEasy=[add(2,g<=2?10:20), sub(2,g<=2?10:20)];
+  const mixMed =[add(lo,hi), sub(lo,hi), mul(2,g<=3?6:9)];
+  const mixHard=[mul(3,g<=4?9:15), div(g<=4?9:15), add(lo,hi*2)];
+  const build=(mix,n)=>{const out=[],sn=new Set();let guard=0;while(out.length<n&&guard++<400){const f=mix[Math.floor(Math.random()*mix.length)];const it=f();if(!sn.has(it.target)){sn.add(it.target);out.push(it);}}return out;};
+  _mathGenCache={subject:"math",label:"Math",prompt:"Drive into the ANSWER to",gen:true,
+    easy:build(mixEasy,28),medium:build(mixMed,28),hard:build(mixHard,28),
+    refresh:()=>{_mathGenCache=null;return genMathBank();}};
+  return _mathGenCache;
+}
 function fastBank(subject){
   if(CONFIG.topicGen && CONFIG.topicGen.subject===subject) return CONFIG.topicGen;
   const k=CONFIG.topicKey;
   if(k && TOPICS[k] && TOPICS[k].subject===subject) return TOPICS[k];
+  if(subject==="math") return genMathBank();   // #48: infinite, non-repeating math fallback
   return FAST[subject];
 }
 /* Free-text topics: "addition" → a real generated practice bank. */
@@ -3125,6 +3150,26 @@ function topicFromText(txt){ const t=(txt||"").toLowerCase().trim(); if(!t) retu
   const D=(hi)=>()=>{const b=R(2,hi),v=R(2,hi),a=b*v;return{target:a+" ÷ "+b,correct:String(v),decoys:near(v,3)}};
   const tt=t.match(/(\d+)\s*(times table|x table|× table)/);
   if(tt){const n=+tt[1];return bank(n+"× times table",M(0,0,n),M(0,0,n),M(0,0,n));}
+  // #47: "word problems" -> MATH story problems. If the text also names an operation
+  // ("addition word problems"), focus on it; otherwise a general mix that ramps.
+  if(/word ?problem|story problem/.test(t)){
+    const nm=["Maya","Sam","Ravi","Lea","Ben","Ada","Kai","Noa","Tomi","Rin"];
+    const N=()=>nm[R(0,nm.length-1)];
+    const WPa=(lo,hi)=>()=>{const a=R(lo,hi),b=R(lo,hi),v=a+b;return{target:N()+" had "+a+", got "+b+" more — how many?",correct:String(v),decoys:near(v,3)}};
+    const WPs=(lo,hi)=>()=>{let a=R(lo,hi),b=R(lo,hi);if(b>a){const c=a;a=b;b=c;}const v=a-b;return{target:N()+" had "+a+", gave "+b+" away — how many left?",correct:String(v),decoys:near(v,3)}};
+    const WPm=(lo,hi)=>()=>{const a=R(lo,hi),b=R(2,9),v=a*b;return{target:a+" boxes of "+b+" — how many in all?",correct:String(v),decoys:near(v,Math.max(3,a))}};
+    const WPd=(hi)=>()=>{const b=R(2,hi),q=R(2,hi),a=b*q;return{target:a+" shared by "+b+" kids — each gets?",correct:String(q),decoys:near(q,3)}};
+    const anyOf=(...gs)=>()=>gs[R(0,gs.length-1)]();
+    const wAdd=/add|plus|\bsum\b/.test(t),wSub=/subtract|minus|take|difference|left/.test(t),wMul=/multipl|times|product|group/.test(t),wDiv=/divi|share|quotient|split/.test(t);
+    const any=!(wAdd||wSub||wMul||wDiv);
+    const eG=[],mG=[],hG=[];
+    if(wAdd||any){eG.push(WPa(2,20));mG.push(WPa(11,60));hG.push(WPa(50,300));}
+    if(wSub||any){eG.push(WPs(2,20));mG.push(WPs(11,60));hG.push(WPs(50,300));}
+    if(wMul||any){mG.push(WPm(2,6));hG.push(WPm(3,12));}
+    if(wDiv||any){mG.push(WPd(9));hG.push(WPd(15));}
+    if(!eG.length)eG.push(WPa(2,20),WPs(2,20));
+    return bank("Word Problems",anyOf(...eG),anyOf(...mG),anyOf(...hG));
+  }
   if(/add|plus|\bsum\b|\+/.test(t)) return bank("Addition",A(2,20),A(11,99),A(101,999));
   if(/subtract|minus|take.?away|difference/.test(t)) return bank("Subtraction",S2(2,20),S2(20,99),S2(100,999));
   if(/multipl|times/.test(t)) return bank("Multiplication",M(2,6),M(3,9),M(7,15));
@@ -7084,7 +7129,8 @@ function mapPlayStyle(profile){
   return 'reflex-seeker';
 }
 function subjectOfSkill(skill){ if(!skill) return 'english'; const s=skill.toLowerCase();
-  if(/math|algebra|fraction|ratio|equation|multipl|integer|number|geometry|decimal|proportion/.test(s)) return 'math';
+  // #47: "word problems" / "story problems" are MATH — they used to fall through to english
+  if(/math|algebra|fraction|ratio|equation|multipl|divi|integer|number|geometry|decimal|proportion|percent|word ?problem|story problem|arithmetic|addition|subtraction|counting|place value/.test(s)) return 'math';
   if(/scien|concept|world knowledge/.test(s)) return 'science'; return 'english'; }
 function applyProfile(profile){
   try{
@@ -12907,7 +12953,7 @@ function TextPanel(w,h,opts){
   opts=opts||{};
   const cv=document.createElement("canvas"); cv.width=opts.pw||640; cv.height=opts.ph||320;
   const tex=new THREE.CanvasTexture(cv); tex.minFilter=THREE.LinearFilter;
-  const mat=new THREE.MeshBasicMaterial({map:tex, transparent:!!opts.transparent});
+  const mat=new THREE.MeshBasicMaterial({map:tex, transparent:!!opts.transparent, side:THREE.DoubleSide});
   const mesh=new THREE.Mesh(new THREE.PlaneGeometry(w,h), mat);
   const g=cv.getContext("2d");
   mesh.setText=function(lines, o2){
@@ -17042,11 +17088,22 @@ const INTERIORS={
       makeFill:()=>({ set:(p)=>{}, pop:(c)=>{ parts.push(c); canvas.material.color.setHex(mixColor()); },
         flash:()=>{ parts=[]; setTimeout(()=>canvas.material.color.setHex(0xffffff),700); } }),
       makeRound:(tier,round,items)=>{
-        // ratio recipes only — "2 parts Red + 3 parts Yellow" = a real color
+        // #49: reflect the child's ACTIVE study topic, not just counting. Pull a topic
+        // question whose answer is a small whole number and make THAT the part-count —
+        // so a kid on multiplication/division practices it here. Falls back to a plain
+        // colour ratio when the topic has no small-integer answer (e.g. reading).
+        let q=null;
+        for(let i=0;i<8;i++){ const it=cityDrawItem(); const v=Number(it.correct);
+          if(Number.isInteger(v) && v>=2 && v<=6){ q={label:it.target, val:v}; break; } }
         const n=tier===0?2:(tier<2?2:3);
         const chosen=[...items].sort(()=>Math.random()-0.5).slice(0,n);
         const req={}, label=[];
-        chosen.forEach(it=>{ const c=1+Math.floor(Math.random()*(tier+2)); req[it.name]=c; label.push(c+" part"+(c>1?"s":"")+" "+it.ico); });
+        chosen.forEach((it,idx)=>{
+          let c;
+          if(q && idx===0){ c=q.val; label.push("("+q.label+") "+it.ico); }
+          else { c=1+Math.floor(Math.random()*(tier+2)); label.push(c+" part"+(c>1?"s":"")+" "+it.ico); }
+          req[it.name]=c;
+        });
         return { mode:"recipe", req, label:"Mix:  "+label.join("  +  ") };
       },
     });
@@ -19245,6 +19302,23 @@ function actStart(act){
   CITY.ui.act.style.display="block";
 }
 function actHUD(html){ CITY.ui.act.innerHTML=`<span class="chud-pill">${html}</span>`; }
+/* #45: first-time "how it works" card for a native activity mechanic. Keyed so it
+   shows ONCE per player per mechanic (press / walk / carry / race / shoot) — later
+   plays just get the HUD hint. Audience is 8–14, so steps are short and concrete. */
+function actIntro(key, title, steps){
+  try{ CSAVE.tut=CSAVE.tut||{}; }catch(e){ return; }
+  if(CSAVE.tut['a_'+key]) return;
+  CSAVE.tut['a_'+key]=true; citySave();
+  setTimeout(()=>{
+    if(!CITY.activity) return;
+    const body=`<div style="font-size:15px;line-height:1.85;text-align:left;font-weight:700;max-width:330px;margin:0 auto">`+
+      steps.map((s,i)=>`<div style="margin:5px 0"><b class="warn">${i+1}.</b> ${s}</div>`).join("")+`</div>`;
+    cityModal(title, "quick how-to — you've got this!",
+      body+`<div style="text-align:center;margin-top:12px"><button class="cbtn" id="ai-go" style="font-size:15px;padding:11px 30px">Let's go ▶</button></div>`,
+      {id:"actintro",closeText:"▶"});
+    const b=document.getElementById("ai-go"); if(b) b.onclick=()=>cityCloseMenu(true);
+  }, 420);
+}
 function actEnd(silent){
   const act=CITY.activity; if(!act) return;
   (act._cleanup||[]).forEach(m=>CITY.scene.remove(m));
@@ -19393,6 +19467,10 @@ function startRace(){
     if(!owned.length) cityToast("🏎️ Loaner kart provided for the race!"); }
   const act={ laps:0, need:2, correct:0, total:0, t:0, nextCk:0, boost:0, aim:true };
   actStart(act);
+  actIntro("race","🏁 Answer-Gate Grand Prix",[
+    "Drive around the track — each lap has answer gates.",
+    "Read the QUESTION on the big board, then steer through the gate with the RIGHT answer.",
+    "Right answer = speed BOOST. Finish 2 laps to win!"]);
   const startAng=Math.atan2(SPOTS.trackStart.z-d.z, SPOTS.trackStart.x-d.x);
   const CKS=6;                      // checkpoints per lap
   act.gates=[];
@@ -20641,6 +20719,17 @@ function actTrioStations(cfg){
   const carryMode=cfg.mode==="carry", walkMode=cfg.mode==="walk";
   const act={ round:0, total:cfg.rounds||3, right:0, carrying:false, allowInteract:true };
   actStart(act);
+  actIntro(cfg.mode||"press",
+    carryMode? "🎒 Fetch & Deliver" : walkMode? "🚶 Walk the Answer" : "🅴 Press the Answer",
+    carryMode? ["Read the QUESTION on the big board.",
+                "First follow the gold ⬇E marker and press E to pick something up.",
+                "Then carry it to the ANSWER you think is right and press E there."]
+    : walkMode? ["Read the QUESTION on the big board.",
+                 "Three answers sit on glowing spots.",
+                 "Just WALK onto the spot with the right answer!"]
+    :           ["Read the QUESTION on the big board.",
+                 "Three answers sit on glowing spots — a ⬇E marker bounces over each.",
+                 "Stand on the RIGHT answer and press E to lock it in!"]);
   // question board: high and centered, well BEHIND the station arc
   const bp=P(0,16), board=actBoard(bp.x,11.5,bp.z,F.yaw+Math.PI); act.add(board);
   const stations=[], rings=[], marks=[];
@@ -20655,7 +20744,7 @@ function actTrioStations(cfg){
       mk.position.set(p.x,5.5,p.z); CITY.scene.add(mk); act._cleanup.push(mk); marks.push(mk);
     }
   });
-  let carryM=null, srcP=null;
+  let carryM=null, srcP=null, srcMark=null;
   if(carryMode){
     const sa=cfg.sourceAt||[14,-8];
     srcP=P(sa[0],sa[1]);
@@ -20663,6 +20752,11 @@ function actTrioStations(cfg){
     g.position.set(srcP.x,0,srcP.z); g.rotation.y=F.yaw+Math.PI; act.add(g);
     const sl=makeTextSprite(cfg.sourceLabel||"press E to pick up",{px:28,scale:0.009});
     sl.position.set(srcP.x,3.1,srcP.z); act.add(sl);
+    // carry games have a two-step flow (grab HERE first, then deliver) — the pump
+    // needs its OWN bouncing "press E" marker so kids know where to start, and the
+    // station markers stay hidden until they're actually carrying something.
+    srcMark=makeTextSprite("⬇ E",{px:44,scale:0.013,bg:"rgba(255,207,92,.28)",color:"#ffcf5c"});
+    srcMark.position.set(srcP.x,5.5,srcP.z); CITY.scene.add(srcMark); act._cleanup.push(srcMark);
     carryM=cfg.carry(); carryM.visible=false; act.add(carryM);
   }
   let labs=[];
@@ -20720,7 +20814,10 @@ function actTrioStations(cfg){
   act.update=(dt,t)=>{
     // station identity: podium rings pulse (big pulse = walk onto me), markers bounce
     rings.forEach((r,i)=>{ const s=1+Math.sin(t*3+i*2)*(walkMode?0.15:0.05); r.scale.set(s,s,1); });
-    marks.forEach((mk,i)=>{ mk.position.y=5.5+Math.abs(Math.sin(t*2.6+i))*0.5; });
+    marks.forEach((mk,i)=>{ mk.position.y=5.5+Math.abs(Math.sin(t*2.6+i))*0.5;
+      // carry games: only point at the delivery stations once a can is in hand
+      if(carryMode) mk.visible=!!act.carrying; });
+    if(srcMark){ srcMark.visible=!act.carrying; srcMark.position.y=5.5+Math.abs(Math.sin(t*2.6))*0.5; }
     if(carryMode&&act.carrying){
       const pp=CITY.player.group.position, f=CITY.player.group.rotation.y;
       carryM.position.set(pp.x+Math.sin(f)*0.55, 1.25+Math.sin(t*6)*0.05, pp.z+Math.cos(f)*0.55);
@@ -20750,6 +20847,10 @@ function actTrioShoot(cfg){
   CITY.look.yaw=F.yaw+Math.PI; CITY.look.pitch=0.12;
   const act={ round:0, total:cfg.rounds||3, right:0, aim:true };
   actStart(act);
+  actIntro("shoot","🎯 Aim & Fire",[
+    "Read the QUESTION on the big board.",
+    "Move your view to aim — three answers float in front of you.",
+    "CLICK / tap to fire at the answer you think is RIGHT!"]);
   // question board: high and centered, well BEHIND the target arc
   const bp=P(0,22), board=actBoard(bp.x,13,bp.z,F.yaw+Math.PI); act.add(board);
   let targets=[];
@@ -22829,7 +22930,7 @@ function cityInitTouch(){
    10-init: wire the city into the platform (monkey-patches) + enter/exit flow
    ============================================================================ */
 
-const CITY_BUILD="r26b-stations (answer stations redesigned: podium arc, big chips, E markers, question board moved clear)";
+const CITY_BUILD="r27-clarity (double-sided question boards, fuel-pump E-marker + guided first-play intros, word-problems→math, generative non-repeating math, topic-aware Paint Studio)";
 try{ console.log("%c🌆 Learning City "+CITY_BUILD, "font-weight:bold;color:#57d98a"); }catch(e){}
 let _cityBuilt=false;
 CITY.enter=function(){
