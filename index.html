@@ -14615,6 +14615,10 @@ function cityInitInput(){
 
 /* ---------------- collision ---------------- */
 function collidePlayer(px,pz,r){
+  // r27d: focus mode — the hidden world's colliders go ghost too. Without this,
+  // the (invisible) game-pad kiosk at the arena center was an unwalkable wall
+  // straight on the path to the middle answer.
+  if(CITY.activity && CITY.activity._hidden) return [px,pz];
   const _ey=CITY.vehicle?CITY.vehicle.group.position.y:(CITY.player?CITY.player.group.position.y:0);
   for(const c of CITY.colliders){
     if(c.zone && c.zone!==CITY.zone) continue;
@@ -16339,9 +16343,9 @@ function buildIceWorld(){
   const L=(lx,lz)=>({x:o[0]+lx, z:o[1]+lz});
   // snow ground + icy shore rim (sits on the ocean skirt)
   const snow=new THREE.Mesh(new THREE.CircleGeometry(R,48),new THREE.MeshLambertMaterial({color:0xf2f7fd}));
-  snow.rotation.x=-Math.PI/2; snow.position.set(o[0],0.02,o[1]); snow.receiveShadow=true; CITY.scene.add(snow);
+  snow.rotation.x=-Math.PI/2; snow.position.set(o[0],0.02,o[1]); snow.receiveShadow=true; snow.userData.fk=1; CITY.scene.add(snow);   // fk: ground stays in focus mode
   const rim=new THREE.Mesh(new THREE.RingGeometry(R-2,R+8,48),new THREE.MeshLambertMaterial({color:0xbfe0f0,transparent:true,opacity:0.85}));
-  rim.rotation.x=-Math.PI/2; rim.position.set(o[0],-0.15,o[1]); CITY.scene.add(rim);
+  rim.rotation.x=-Math.PI/2; rim.position.set(o[0],-0.15,o[1]); rim.userData.fk=1; CITY.scene.add(rim);
   // frozen pond with a lit rink ring
   const pd=L(-34,-22);
   const pond=new THREE.Mesh(new THREE.CircleGeometry(14,28),new THREE.MeshLambertMaterial({color:0xcfeaff}));
@@ -16394,7 +16398,7 @@ function buildIceWorld(){
     arr[i*3]=o[0]+Math.cos(a)*r; arr[i*3+1]=rand(0,26); arr[i*3+2]=o[1]+Math.sin(a)*r; }
   sg.setAttribute("position",new THREE.BufferAttribute(arr,3));
   const flakes=new THREE.Points(sg,new THREE.PointsMaterial({color:0xffffff,size:2.6,sizeAttenuation:false,transparent:true,opacity:0.85}));
-  CITY.scene.add(flakes);
+  flakes.userData.fk=1; CITY.scene.add(flakes);   // snowfall is ambience, like clouds — stays in focus mode
   CITY.dyn.push({update:(dt,t)=>{ if(CITY.zone!=="ice") return;
     const p2=sg.attributes.position;
     for(let i=0;i<N;i++){ let y=p2.getY(i)-dt*(2.2+(i%5)*0.5); if(y<0) y=26; p2.setY(i,y); }
@@ -16407,9 +16411,9 @@ function buildLavaWorld(){
   const L=(lx,lz)=>({x:o[0]+lx, z:o[1]+lz});
   // dark volcanic rock ground + scorched rim
   const rock=new THREE.Mesh(new THREE.CircleGeometry(R,48),new THREE.MeshLambertMaterial({color:0x241a1c}));
-  rock.rotation.x=-Math.PI/2; rock.position.set(o[0],0.02,o[1]); rock.receiveShadow=true; CITY.scene.add(rock);
+  rock.rotation.x=-Math.PI/2; rock.position.set(o[0],0.02,o[1]); rock.receiveShadow=true; rock.userData.fk=1; CITY.scene.add(rock);   // fk: ground stays in focus mode
   const rim=new THREE.Mesh(new THREE.RingGeometry(R-2,R+8,48),new THREE.MeshLambertMaterial({color:0x140c0e,transparent:true,opacity:0.9}));
-  rim.rotation.x=-Math.PI/2; rim.position.set(o[0],-0.15,o[1]); CITY.scene.add(rim);
+  rim.rotation.x=-Math.PI/2; rim.position.set(o[0],-0.15,o[1]); rim.userData.fk=1; CITY.scene.add(rim);
   // volcano cone with a glowing crater
   const vc=L(0,-58);
   B.cone(30,26,0x3a2426,vc.x,13,vc.z,12);
@@ -16461,7 +16465,7 @@ function buildLavaWorld(){
     arr[i*3]=o[0]+Math.cos(a)*r; arr[i*3+1]=rand(0,20); arr[i*3+2]=o[1]+Math.sin(a)*r; }
   eg.setAttribute("position",new THREE.BufferAttribute(arr,3));
   const embers=new THREE.Points(eg,new THREE.PointsMaterial({color:0xffa53d,size:2.4,sizeAttenuation:false,transparent:true,opacity:0.8}));
-  CITY.scene.add(embers);
+  embers.userData.fk=1; CITY.scene.add(embers);   // rising embers are ambience — stay in focus mode
   CITY.dyn.push({update:(dt,t)=>{ if(CITY.zone!=="lava") return;
     const p2=eg.attributes.position;
     for(let i=0;i<N;i++){ let y=p2.getY(i)+dt*(1.6+(i%4)*0.6); if(y>20) y=0; p2.setY(i,y); }
@@ -19308,7 +19312,9 @@ function actStart(act){
   // question board, and the sky/grass/sea. Restored by actEnd. Games whose arena
   // IS world geometry (race track, dive sub, runway catwalk) set keepWorld:true.
   act._hidden=null;
-  if(CITY.zone==="island" && !act.keepWorld){
+  // r27d: focus mode also covers the travel worlds (Glacier/Ember Isle) — there the
+  // game pads' KIOSK stands at the arena center and blocked the middle answer.
+  if((CITY.zone==="island"||CITY.zone==="ice"||CITY.zone==="lava") && !act.keepWorld){
     const w=CITY.world||{};
     const keep=new Set([CITY.player&&CITY.player.group, CITY.vehicle&&CITY.vehicle.group,
       CITY.pet&&CITY.pet.group, w.ocean, w.dome, w.stars, w.sunDisc, w.moonDisc, w.sunGlow]
@@ -22961,7 +22967,7 @@ function cityInitTouch(){
    10-init: wire the city into the platform (monkey-patches) + enter/exit flow
    ============================================================================ */
 
-const CITY_BUILD="r27c-focus (FOCUS MODE: entering any city game hides the whole world — just you, the game props, and the question; world returns when the game ends)";
+const CITY_BUILD="r27d-isle-focus (focus mode now covers Glacier & Ember Isle — the game-pad kiosk that blocked the middle answer disappears with the rest of the world, and hidden-world colliders go ghost)";
 try{ console.log("%c🌆 Learning City "+CITY_BUILD, "font-weight:bold;color:#57d98a"); }catch(e){}
 let _cityBuilt=false;
 CITY.enter=function(){
