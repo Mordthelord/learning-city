@@ -19894,14 +19894,21 @@ function startAimTrio(kind){
   CITY.look.yaw=face; CITY.look.pitch=0.12;
   const act={ shot:0, total:6, right:0, aim:true };
   actStart(act);
-  const board=actBoard(base.x-Math.sin(F.yaw)*(-14), isArch?7:11, base.z-Math.cos(F.yaw)*(-14), F.yaw+Math.PI); act.add(board);
+  // r27b (#44-follow-up): the decorative goalpost stands 6m out DEAD ON the middle
+  // ring's throw line. r24 tried flying over it by raising the middle ring to y7.2 —
+  // but the sling caps at maxVy 10 / gravity 16, apex ≈ y4.7, so the middle answer
+  // became physically UNHITTABLE (every throw fell short forever). Real fix: all
+  // three rings at the same catchable height, and the whole arc (rings + question
+  // board + facing) slides sideways so nothing stands between player and answers.
+  const latX = isArch?0 : Math.cos(F.yaw)*7,  latZ = isArch?0 : -Math.sin(F.yaw)*7;
+  const board=actBoard(base.x-Math.sin(F.yaw)*(-14)+latX, isArch?7:11, base.z-Math.cos(F.yaw)*(-14)+latZ, F.yaw+Math.PI); act.add(board);
   act.targets=[];
   function newRound(){
     act.item=cityDrawItem(); boardAsk(board, act.item);
     act.targets.forEach(g=>CITY.scene.remove(g)); act.targets=[];
     [-1,0,1].forEach((s,i)=>{
       const spread=isArch?0.8:0.5;
-      const tx=base.x-Math.sin(F.yaw+s*spread)*(-10), tz=base.z-Math.cos(F.yaw+s*spread)*(-10);
+      const tx=base.x-Math.sin(F.yaw+s*spread)*(-10)+latX, tz=base.z-Math.cos(F.yaw+s*spread)*(-10)+latZ;
       const g=new THREE.Group();
       if(isArch){
         const t1=new THREE.Mesh(new THREE.CylinderGeometry(0.9,0.9,0.24,12),new THREE.MeshLambertMaterial({color:0xffffff})); t1.rotation.x=Math.PI/2; g.add(t1);
@@ -19911,9 +19918,8 @@ function startAimTrio(kind){
       } else {
         const ring=new THREE.Mesh(new THREE.TorusGeometry(1.5,0.18,8,18),new THREE.MeshLambertMaterial({color:0xffd75c}));
         g.add(ring);
-        // r24: middle ring raised to 3.4+3.8 so the goalpost upright/crossbar (tops at y6)
-        // no longer hides the MIDDLE answer — all three labels fully readable
-        g.position.set(tx,3.4+(i===1?3.8:0),tz);
+        // r27b: SAME reachable height for all three (the arc is clear of the post now)
+        g.position.set(tx,3.4,tz);
         g.userData.bobPh=i;
       }
       const lab=ansSprite(act.item.answers[i]); lab.position.y=isArch?-1.5:2.6; g.add(lab);
@@ -19923,6 +19929,11 @@ function startAimTrio(kind){
     actHUD(`${isArch?"🏹":"🏈"} ${act.shot+1}/${act.total} · ✅ ${act.right} · DRAG back like a ${isArch?"bowstring":"slingshot"}, release to ${isArch?"loose":"throw"}!`);
   }
   newRound();
+  // r27b: face the (laterally shifted) middle ring, not the old goalpost line
+  if(!isArch && act.targets[1]){
+    const mp=act.targets[1].position, plp=CITY.player.group.position;
+    CITY.look.yaw=Math.atan2(mp.x-plp.x, mp.z-plp.z)+Math.PI;
+  }
   let proj=null, projVel=null, projDist=0;
   // r24: the ball/bow is CARRIED — walk anywhere, throw/shoot from where you stand
   const pp=CITY.player.group.position;
@@ -19972,7 +19983,7 @@ function startAimTrio(kind){
     if(!proj){ const f=CITY.player.group.rotation.y;
       carry.position.set(pp.x+Math.sin(f)*0.45, 1.35, pp.z+Math.cos(f)*0.45);
       if(isArch) carry.rotation.z=Math.PI/2.4; }
-    act.targets.forEach((g,i)=>{ if(g.userData.bobPh!==undefined) g.position.y=3.4+(i===1?3.8:0)+Math.sin(t*1.4+g.userData.bobPh*2)*0.5; });   // r24: keep raised middle
+    act.targets.forEach((g,i)=>{ if(g.userData.bobPh!==undefined) g.position.y=3.4+Math.sin(t*1.4+g.userData.bobPh*2)*0.5; });   // r27b: all rings at catchable height
     if(proj&&projVel){
       // substep so fast shots can't tunnel through a target between frames
       const steps=3, sdt=dt/steps;
@@ -22930,7 +22941,7 @@ function cityInitTouch(){
    10-init: wire the city into the platform (monkey-patches) + enter/exit flow
    ============================================================================ */
 
-const CITY_BUILD="r27-clarity (double-sided question boards, fuel-pump E-marker + guided first-play intros, word-problems→math, generative non-repeating math, topic-aware Paint Studio)";
+const CITY_BUILD="r27b-rings (field-goal rings: middle answer was physically unreachable over the goalpost — arc moved clear of the post, all rings at catchable height; + r27 clarity fixes)";
 try{ console.log("%c🌆 Learning City "+CITY_BUILD, "font-weight:bold;color:#57d98a"); }catch(e){}
 let _cityBuilt=false;
 CITY.enter=function(){
