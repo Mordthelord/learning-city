@@ -20489,7 +20489,7 @@ function startFarmFeed(){
   CITY.look.yaw=F.yaw+Math.PI; CITY.look.pitch=0;      // face the troughs & board
   const act={ round:0, total:3, right:0, carrying:false, allowInteract:true };
   actStart(act);
-  const board=actBoard(...(()=>{const p=F.L(10,36);return [p.x,7,p.z];})(), F.yaw+Math.PI); act.add(board);
+  const board=actBoard(...(()=>{const p=F.L(10,40);return [p.x,10.5,p.z];})(), F.yaw+Math.PI); act.add(board);   // r25.1: question HIGH + behind the troughs
   // feed sack
   const sackP=F.L(18,26);
   const sack=new THREE.Group();
@@ -20508,6 +20508,7 @@ function startFarmFeed(){
   [-1,0,1].forEach((s,i)=>{
     const tp=F.L(2+ (s+1)*8, 31);            // local x 2 / 10 / 18, z 31
     const g=new THREE.Group();
+    natPodium(g,i);                          // r25.1: consistent glowing answer-podium look
     const tub=new THREE.Mesh(new THREE.BoxGeometry(2.6,0.7,1.1),new THREE.MeshLambertMaterial({color:0x8a6a45}));
     tub.position.y=0.35; g.add(tub);
     const feed=new THREE.Mesh(new THREE.BoxGeometry(2.2,0.16,0.8),new THREE.MeshLambertMaterial({color:0xd8b860}));
@@ -20526,8 +20527,8 @@ function startFarmFeed(){
     act.item=cityDrawItem(); boardAsk(board,act.item);
     labs.forEach(l=>CITY.scene.remove(l)); labs=[];
     troughs.forEach((tr,i)=>{
-      const lab=ansSprite(act.item.answers[i]);
-      lab.position.copy(tr.g.position); lab.position.y=2.2;
+      const lab=natChip(act.item.answers[i]);   // r25.1: same big chip style as every station game
+      lab.position.copy(tr.g.position); lab.position.y=3.0;
       CITY.scene.add(lab); labs.push(lab); act._cleanup.push(lab);
       tr.g.userData.feed.scale.set(1,1,1);
     });
@@ -20606,28 +20607,57 @@ const NB={
   cone:(g,r,h,c,x,y,z)=>natIn(g,natMesh(new THREE.ConeGeometry(r,h,8),c),x,y,z)
 };
 
+/* r25.1 (playtest): ONE unmistakable answer-station look everywhere —
+   glowing colored podium on the ground, a BIG dark camera-facing answer chip
+   floating above it, and a mode marker (bouncing "⬇ E" for press/carry,
+   pulsing ring for walk-through, colored halo for shoot targets). The
+   question board goes HIGH and far BEHIND the stations so it can never stack
+   with an answer chip. Stations sit in a wide arc (>=8m apart) facing the
+   re-anchored player start, all on screen at the default camera. */
+const NAT_TRIO_COLS=[0xff5d8a,0x38d0e8,0xffd75c];
+const NAT_ARC=[[-10,3],[0,6],[10,3]];          // station arc (stations frame)
+const NAT_ARC_FAR=[[-11,7],[0,10],[11,7]];     // target arc (shoot frame)
+function natChip(text){
+  return makeTextSprite(String(text),{px:64,scale:0.019,bg:"rgba(8,10,24,.95)",color:"#fff"});
+}
+function natPodium(g,i){
+  const c=NAT_TRIO_COLS[i%3];
+  NB.cyl(g,1.9,2.1,0.22,0x1c2140,0,0.11,0);
+  const ring=natMesh(new THREE.TorusGeometry(1.95,0.1,8,24),c);
+  ring.rotation.x=Math.PI/2; ring.position.y=0.26;
+  ring.material.emissive=new THREE.Color(c); ring.material.emissiveIntensity=0.9;
+  g.add(ring);
+  return ring;
+}
+
 /* ---- shared frame 1: three themed answer STATIONS ---- */
 function actTrioStations(cfg){
   const F=natFrame(cfg); if(!F) return;
   const A=cfg.at, P=(lx,lz)=>F.L(A[0]+lx, A[1]+lz);
   cityExitVehicle(true);
-  const sp0=P(0,-6);
+  const sp0=P(0,-10);
   CITY.player.group.position.set(sp0.x,0,sp0.z);
-  CITY.look.yaw=F.yaw+Math.PI; CITY.look.pitch=0;
+  CITY.look.yaw=F.yaw+Math.PI; CITY.look.pitch=0.05;
   const carryMode=cfg.mode==="carry", walkMode=cfg.mode==="walk";
   const act={ round:0, total:cfg.rounds||3, right:0, carrying:false, allowInteract:true };
   actStart(act);
-  const bp=P(0,10), board=actBoard(bp.x,6.6,bp.z,F.yaw+Math.PI); act.add(board);
-  const stations=[];
-  [-1,0,1].forEach((s,i)=>{
-    const p=P(s*6.5,4), g=new THREE.Group();
-    cfg.station(g,i);
+  // question board: high and centered, well BEHIND the station arc
+  const bp=P(0,16), board=actBoard(bp.x,11.5,bp.z,F.yaw+Math.PI); act.add(board);
+  const stations=[], rings=[], marks=[];
+  NAT_ARC.forEach(([ax,az],i)=>{
+    const p=P(ax,az), g=new THREE.Group();
+    rings.push(natPodium(g,i));                 // consistent glowing podium first
+    cfg.station(g,i);                           // themed prop sits on top of it
     g.position.set(p.x,0,p.z); g.rotation.y=F.yaw+Math.PI;
     CITY.scene.add(g); act._cleanup.push(g); stations.push(g);
+    if(!walkMode){                              // bouncing "press E here" marker
+      const mk=makeTextSprite("⬇ E",{px:44,scale:0.013,bg:"rgba(24,240,200,.25)",color:"#8ef0b5"});
+      mk.position.set(p.x,5.5,p.z); CITY.scene.add(mk); act._cleanup.push(mk); marks.push(mk);
+    }
   });
   let carryM=null, srcP=null;
   if(carryMode){
-    const sa=cfg.sourceAt||[11,-4];
+    const sa=cfg.sourceAt||[14,-8];
     srcP=P(sa[0],sa[1]);
     const g=new THREE.Group(); cfg.source(g);
     g.position.set(srcP.x,0,srcP.z); g.rotation.y=F.yaw+Math.PI; act.add(g);
@@ -20644,8 +20674,8 @@ function actTrioStations(cfg){
     act.item=cityDrawItem(); boardAsk(board,act.item);
     labs.forEach(l=>CITY.scene.remove(l)); labs=[];
     stations.forEach((g,i)=>{
-      const lab=ansSprite(act.item.answers[i]);
-      lab.position.set(g.position.x, cfg.labelY!==undefined?cfg.labelY:2.7, g.position.z);
+      const lab=natChip(act.item.answers[i]);   // BIG readable chip over the podium
+      lab.position.set(g.position.x, 4.2, g.position.z);   // above every themed prop
       CITY.scene.add(lab); labs.push(lab); act._cleanup.push(lab);
     });
     if(carryMode){ act.carrying=false; carryM.visible=false; }
@@ -20688,6 +20718,9 @@ function actTrioStations(cfg){
   }
   newRound();
   act.update=(dt,t)=>{
+    // station identity: podium rings pulse (big pulse = walk onto me), markers bounce
+    rings.forEach((r,i)=>{ const s=1+Math.sin(t*3+i*2)*(walkMode?0.15:0.05); r.scale.set(s,s,1); });
+    marks.forEach((mk,i)=>{ mk.position.y=5.5+Math.abs(Math.sin(t*2.6+i))*0.5; });
     if(carryMode&&act.carrying){
       const pp=CITY.player.group.position, f=CITY.player.group.rotation.y;
       carryM.position.set(pp.x+Math.sin(f)*0.55, 1.25+Math.sin(t*6)*0.05, pp.z+Math.cos(f)*0.55);
@@ -20697,8 +20730,8 @@ function actTrioStations(cfg){
       let near=-1, allFar=true;
       stations.forEach((g,i)=>{
         const dd=dist2(pp.x,pp.z,g.position.x,g.position.z);
-        if(dd<2.3*2.3) near=i;
-        if(dd<4.5*4.5) allFar=false;
+        if(dd<2.4*2.4) near=i;
+        if(dd<5*5) allFar=false;
       });
       if(!act._armed){ if(allFar) act._armed=true; }
       else if(near>=0) choose(near);
@@ -20712,21 +20745,26 @@ function actTrioShoot(cfg){
   const F=natFrame(cfg); if(!F) return;
   const A=cfg.at, P=(lx,lz)=>F.L(A[0]+lx, A[1]+lz);
   cityExitVehicle(true);
-  const sp0=P(0,-8);
+  const sp0=P(0,-10);
   CITY.player.group.position.set(sp0.x,0,sp0.z);
-  CITY.look.yaw=F.yaw+Math.PI; CITY.look.pitch=0.1;
+  CITY.look.yaw=F.yaw+Math.PI; CITY.look.pitch=0.12;
   const act={ round:0, total:cfg.rounds||3, right:0, aim:true };
   actStart(act);
-  const bp=P(0,15), board=actBoard(bp.x,8.4,bp.z,F.yaw+Math.PI); act.add(board);
+  // question board: high and centered, well BEHIND the target arc
+  const bp=P(0,22), board=actBoard(bp.x,13,bp.z,F.yaw+Math.PI); act.add(board);
   let targets=[];
   function newRound(){
     act.item=cityDrawItem(); boardAsk(board,act.item);
     targets.forEach(g=>CITY.scene.remove(g)); targets=[];
-    [-1,0,1].forEach((s,i)=>{
-      const p=P(s*7,9), g=new THREE.Group();
+    NAT_ARC_FAR.forEach(([ax,az],i)=>{
+      const p=P(ax,az), g=new THREE.Group();
+      // consistent AIM-HERE halo, colored per station, behind the themed target
+      const halo=natMesh(new THREE.TorusGeometry((cfg.hitR||2.1)+0.15,0.12,8,24),NAT_TRIO_COLS[i%3]);
+      halo.material.emissive=new THREE.Color(NAT_TRIO_COLS[i%3]); halo.material.emissiveIntensity=0.9;
+      halo.position.z=-0.4; g.add(halo);
       cfg.target(g,i);
-      const lab=ansSprite(act.item.answers[i]);
-      lab.position.y=cfg.labelDY!==undefined?cfg.labelDY:1.7; g.add(lab);
+      const lab=natChip(act.item.answers[i]);   // BIG readable chip above the halo
+      lab.position.y=cfg.labelDY!==undefined?cfg.labelDY:(cfg.hitR||2.1)+1.4; g.add(lab);
       g.position.set(p.x, cfg.targetY!==undefined?cfg.targetY:3, p.z); g.rotation.y=F.yaw+Math.PI;
       CITY.scene.add(g); targets.push(g); act._cleanup.push(g);
     });
@@ -20798,7 +20836,7 @@ function startFuelRun(){
 function startRampJump(){
   actTrioStations({district:"motor", at:[8,6], mode:"walk", ico:"🛹",
     title:"🛹 Ramp Rally done!", popup:"🛹 BIG AIR! +12 🪙",
-    hint:"RUN up the ramp with the RIGHT answer!", labelY:3.4,
+    hint:"RUN up the ramp with the RIGHT answer!", 
     station:(g)=>{ const r=natMesh(new THREE.BoxGeometry(3,0.25,4),0xff7a3d);
       r.position.set(0,0.9,0); r.rotation.x=-0.45; g.add(r);
       NB.box(g,3,0.2,0.6,0xffd75c,0,1.7,1.8); },
@@ -20817,7 +20855,7 @@ function startAsteroidBlast(){
 function startMoonHop(){
   actTrioStations({district:"space", at:[9,10], mode:"walk", ico:"🌙",
     title:"🌙 Moon-hop complete!", popup:"🌙 PERFECT LANDING! +12 🪙",
-    hint:"hop into the crater with the RIGHT answer — low gravity, big jumps!", labelY:2.4,
+    hint:"hop into the crater with the RIGHT answer — low gravity, big jumps!", 
     station:(g)=>{ NB.tor(g,1.7,0.45,0xb8bdc8,0,0.18,0,Math.PI/2); NB.cyl(g,1.5,1.5,0.1,0x8a8f9a,0,0.08,0); },
     onRight:()=>{ if(CITY.player.vel) CITY.player.vel.y=9; }});
 }
@@ -20833,7 +20871,7 @@ function startSatAlign(){
 function startRuneGates(){
   actTrioStations({district:"fantasy", at:[-14,32], mode:"walk", ico:"🌀",
     title:"🌀 Rune gates passed!", popup:"🌀 THE GATE GLOWS! +12 🪙",
-    hint:"walk through the rune arch with the TRUE answer!", labelY:3.2,
+    hint:"walk through the rune arch with the TRUE answer!", 
     station:(g)=>{ NB.box(g,0.5,3,0.5,0x6a5a8a,-1.4,1.5,0); NB.box(g,0.5,3,0.5,0x6a5a8a,1.4,1.5,0);
       NB.box(g,3.4,0.5,0.5,0x6a5a8a,0,3.1,0); NB.sph(g,0.2,0xb98bff,0,3.6,0); }});
 }
@@ -20863,7 +20901,7 @@ function startCampCook(){
 function startCreekHop(){
   actTrioStations({district:"wild", at:[8,30], mode:"walk", ico:"🪨",
     title:"🪨 Creek crossed!", popup:"🪨 DRY BOOTS! +12 🪙",
-    hint:"hop onto the stepping stone with the RIGHT answer!", labelY:2.2,
+    hint:"hop onto the stepping stone with the RIGHT answer!", 
     station:(g)=>{ NB.sph(g,1.1,0x8a93ab,0,0.15,0).scale.y=0.35; NB.sph(g,0.5,0x9aa3b8,0.9,0.15,0.5).scale.y=0.3; }});
 }
 
@@ -20892,7 +20930,7 @@ function startAnimalRescue(){
 function startTrackPads(){
   actTrioStations({district:"zoo", at:[-12,56], mode:"walk", ico:"🐾",
     title:"🐾 Tracks read!", popup:"🐾 TRACKED IT! +12 🪙",
-    hint:"follow the trail — stand on the paw-print pad with the RIGHT answer!", labelY:2.2,
+    hint:"follow the trail — stand on the paw-print pad with the RIGHT answer!", 
     station:(g)=>{ NB.cyl(g,1.3,1.4,0.16,0x6a5a45,0,0.08,0);
       NB.sph(g,0.28,0x3a3025,0,0.18,0.2).scale.y=0.2;
       [[-0.35,0.62],[0,0.72],[0.35,0.62]].forEach(([px,pz])=>{ NB.sph(g,0.12,0x3a3025,px,0.18,pz).scale.y=0.2; }); }});
@@ -20902,7 +20940,7 @@ function startTrackPads(){
 function startReefRings(){
   actTrioStations({district:"aqua", at:[0,50], mode:"walk", ico:"🪸",
     title:"🪸 Snorkel run done!", popup:"🪸 SPARKLING! +12 🪙",
-    hint:"swim through the coral ring with the RIGHT answer!", labelY:3.0,
+    hint:"swim through the coral ring with the RIGHT answer!", 
     station:(g)=>{ NB.tor(g,1.4,0.2,0xff8bd8,0,1.6,0); NB.cone(g,0.25,0.9,0xff5d8a,-1.2,0.45,0.3); NB.cone(g,0.2,0.7,0xffa53d,1.1,0.35,-0.2); }});
 }
 function startBubblePop(){
@@ -21018,7 +21056,7 @@ function startSnowFort(){
 function startFrostSlide(){
   actTrioStations({world:"ice", zone:"ice", at:[22,-20], mode:"walk", ico:"🐍",
     title:"🐍 Frost Serpent fed!", popup:"🐍 SSSUPER! +12 🪙",
-    hint:"slide through the ice arch with the RIGHT answer — the serpent follows the truth!", labelY:3.2,
+    hint:"slide through the ice arch with the RIGHT answer — the serpent follows the truth!", 
     station:(g)=>{ NB.tor(g,1.6,0.25,0xbfe4ff,0,1.6,0); NB.cone(g,0.35,1.4,0x9ef0ff,-1.8,0.7,0); NB.cone(g,0.35,1.4,0x9ef0ff,1.8,0.7,0); }});
 }
 
@@ -21026,13 +21064,13 @@ function startFrostSlide(){
 function startLavaDash(){
   actTrioStations({world:"lava", zone:"lava", at:[-24,12], mode:"walk", ico:"🏃",
     title:"🏃 Lava Dash survived!", popup:"🏃 COOL FOOTWORK! +12 🪙",
-    hint:"dash onto the cooled-crust plate with the RIGHT answer — the rest is HOT!", labelY:2.3,
+    hint:"dash onto the cooled-crust plate with the RIGHT answer — the rest is HOT!", 
     station:(g)=>{ NB.cyl(g,1.4,1.5,0.2,0x2a1a1c,0,0.1,0); NB.tor(g,1.45,0.1,0xff8a2a,0,0.22,0,Math.PI/2); }});
 }
 function startGeyserJump(){
   actTrioStations({world:"lava", zone:"lava", at:[24,12], mode:"walk", ico:"🌋",
     title:"🌋 Geyser run done!", popup:"🌋 LAUNCHED! +12 🪙",
-    hint:"jump onto the steam vent with the RIGHT answer — it boosts you sky-high!", labelY:2.4,
+    hint:"jump onto the steam vent with the RIGHT answer — it boosts you sky-high!", 
     station:(g)=>{ NB.cyl(g,1.0,1.3,0.5,0x35242a,0,0.25,0); NB.cyl(g,0.5,0.7,0.3,0xff8a2a,0,0.6,0); },
     onRight:()=>{ if(CITY.player.vel) CITY.player.vel.y=10; }});
 }
@@ -22791,7 +22829,7 @@ function cityInitTouch(){
    10-init: wire the city into the platform (monkey-patches) + enter/exit flow
    ============================================================================ */
 
-const CITY_BUILD="r26-hebrew-city (Hebrew mode covers the full 3D city: HUD, venues, quests, shops, NPCs, all 44 games)";
+const CITY_BUILD="r26b-stations (answer stations redesigned: podium arc, big chips, E markers, question board moved clear)";
 try{ console.log("%c🌆 Learning City "+CITY_BUILD, "font-weight:bold;color:#57d98a"); }catch(e){}
 let _cityBuilt=false;
 CITY.enter=function(){
